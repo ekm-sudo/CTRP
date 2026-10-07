@@ -1,0 +1,16 @@
+# Taxpayer data and outputs: never commit (they contain TINs)
+data/*
+!data/.keep
+results/
+*.csv
+*.xlsx
+# Generated queries can be rebuilt with: python main.py sql
+sql/*.sql
+# Connection details
+.env
+# Python, notebook and editor clutter
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+~$*.docx
