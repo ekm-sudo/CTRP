@@ -197,7 +197,7 @@ def cmd_notebook(args):
 
 
 def cmd_docs(args):
-    for f in ['build_decision_record.py', 'build_model_guide.py']:
+    for f in ['build_decision_record.py', 'build_model_guide.py', 'build_markdown_docs.py']:
         runpy.run_path(str(ROOT / 'docs' / 'builders' / f), run_name='__main__')
 
 
