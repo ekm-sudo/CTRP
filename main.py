@@ -107,13 +107,13 @@ def cmd_discovery(args):
         print(avg.round(4).to_string(index=False))
         print(f'written {out}')
         return
-    table, detail = B.evaluate(backtest_extracts(args.pattern))
+    table, detail, weights = B.evaluate(backtest_extracts(args.pattern))
     RESULTS_DIR.mkdir(exist_ok=True)
     out = RESULTS_DIR / 'CTRP_track_b.xlsx'
     with pd.ExcelWriter(out) as w:
         table.to_excel(w, sheet_name='Average of tests')
         detail.to_excel(w, sheet_name='Per snapshot', index=False)
-        B.evaluate.weights.to_excel(w, sheet_name='Learned weights')
+        weights.to_excel(w, sheet_name='Learned weights')
     pd.set_option('display.width', 250)
     print(table[['group_size', 'group_hits', 'disc_lift_top5', 'disc_hits_top5', 'disc_lift_top10',
                  'tests_beating_track_A']].round(2).to_string())
@@ -197,7 +197,7 @@ def cmd_notebook(args):
 
 
 def cmd_docs(args):
-    for f in ['build_decision_record.py', 'build_model_guide.py']:
+    for f in ['build_decision_record.py', 'build_model_guide.py', 'build_markdown_docs.py']:
         runpy.run_path(str(ROOT / 'docs' / 'builders' / f), run_name='__main__')
 
 

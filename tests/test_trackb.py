@@ -16,7 +16,7 @@ def test_track_b_evaluates_both_segments():
     from ctrp import discovery as B
     snaps = ['2024-09-30', '2025-03-31', '2025-09-30', '2026-03-31']
     ex = {s: make_extract(3000, s, seed=i) for i, s in enumerate(snaps)}
-    table, detail = B.evaluate(ex)
+    table, detail, _ = B.evaluate(ex)
     assert set(table.index.get_level_values(0)) == {'regular', 'small'}
     assert detail['snapshot'].nunique() == 2                 # test_from=2: tests on the last two
     assert (table['group_size'] > 0).all()

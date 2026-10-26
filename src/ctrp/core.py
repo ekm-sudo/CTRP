@@ -18,7 +18,16 @@ How a score is built (the four layers)
                       (Stage 6, DECISIONS 46)
   L4  Score and band  the scorecard points, rounded, put in a band (VERY LOW to VERY HIGH)
 
-Reading order for a new officer: SETTINGS, then score_snapshot() at the bottom, then each layer.
+Following one run through this file (score_snapshot, at the bottom, calls these in this order)
+  Step 1  derive()               prepare the rates
+          1a apply_recency()       latest year x1, year before x0.5, the one before x0.25
+          1b _shrink_small_counts() pull rates on few declarations towards the average (only down)
+  Step 2  layer2_scorecard()     each rate -> 0..1 on its ramp (scale) -> x weight -> points
+  Step 3  layer1_peers()         peer group = HS section x size tier (regular taxpayers only)
+  Step 4  layer3_pattern()       Isolation Forest per peer group -> unusualness percentile (a note)
+  Step 5  L4 in score_snapshot() score = sum of points, band_of(score), reasons, notes, rank
+
+Reading order for a new officer: SETTINGS, then score_snapshot() at the bottom, then each step.
 """
 import hashlib
 import json
@@ -51,7 +60,12 @@ MODEL_VERSION = '1.0.0-dev5'
 # Weight = L x I / total of all L x I  (L = likelihood, I = impact, each 1 to 5).
 # L and I below are Data Science working ratings set from the back-test (DECISIONS 41):
 # the three parameters that predict later top-ups carry most of the weight.
-#   PAR_045T 33%, PAR_077 26%, PAR_045 21%, the other five 4% each.
+# They are FIXED numbers: they change only when someone edits them here (and the fingerprint
+# changes with them). Nothing in the code learns or updates them from the data.
+#   L x I:  PAR_045T 5x5 = 25, PAR_077 4x5 = 20, PAR_045 4x4 = 16, the other five 3x1 = 3 each
+#   total:  25 + 20 + 16 + 5 x 3 = 76
+#   weight: PAR_045T 25/76 = 32.9%, PAR_077 20/76 = 26.3%, PAR_045 16/76 = 21.1%, others 3/76 = 3.9%
+# A weight is also the most points a parameter can give: PAR_045T gives up to 32.9 of the 100.
 # reason: the fixed sentence shown to officers. {v} = taxpayer's value, {z} = minimum risk level,
 #         {o} = maximum. fmt says how to write them: 'pct' (percent) or 'yesno'.
 PARAMS = [
@@ -262,7 +276,7 @@ def _shrink_small_counts(d):
         if not (n[has] > 0).any():                  # the input is not in this extract (e.g. PAR_076 in the long run)
             d[col + '_raw'] = d[col]
             continue
-        prior =(d.loc[has, col] * n[has]).sum() / n[has].sum()     # declaration-weighted average
+        prior = (d.loc[has, col] * n[has]).sum() / n[has].sum()    # declaration-weighted average
         w = n / (n + SHRINK_K)
         d[col + '_raw'] = d[col]
         d[col] = np.minimum(d[col], w * d[col] + (1 - w) * prior)
@@ -337,10 +351,15 @@ def _size_tiers(log_value):
 #       If a parameter is missing for a taxpayer, the others are reweighted to still total 100.
 # =========================================================================================
 def layer2_scorecard(d):
+    """Returns (points, available, weights), each one row per taxpayer and one column per parameter.
+    Worked example: top-up rate 20% -> scale (0.20 - 0.03) / (0.40 - 0.03) = 0.459 -> x 32.9 = 15.1 points."""
     scored = [p for p in PARAMS if p['L'] > 2]          # L <= 2 would be context only
     li = pd.Series({p['code']: p['L'] * p['I'] for p in scored})
+    # each parameter on its ramp: 0 below the minimum risk level, 1 at the maximum
     scaled = pd.DataFrame({p['code']: scale(d[p['col']].astype(float), p['zero_at'], p['one_at'])
                            for p in scored}, index=d.index)
+    # weights in points (L x I / total x 100), worked out per taxpayer over the parameters
+    # it has, so a taxpayer missing one parameter still has 100 points available
     available = scaled.notna()
     weights = available.mul(li).div(available.mul(li).sum(axis=1), axis=0) * 100
     points = (scaled.fillna(0) * weights).round(2)
@@ -365,6 +384,10 @@ def _show(v, kind):
 
 
 def layer3_pattern(d, peers, subtotal):
+    """Returns (percentile, low_agreement, evidence), one value per taxpayer:
+      percentile     how unusual within the peer group (1.00 = most unusual; blank if not grouped)
+      low_agreement  True where the score and the pattern point opposite ways (the LAG note)
+      evidence       for taxpayers at or above PATTERN_NOTE_PCT, the two measures furthest from peers"""
     cols = list(dict.fromkeys([p['col'] for p in PARAMS] + PEER_FEATURES + PATTERN_FEATURES))
     pinfo = {p['col']: (p['col'] + '_raw' if p['col'] + '_raw' in d else p['col'], PATTERN_PARAM_TEXT[p['col']],
                         p['fmt']) for p in PARAMS}
@@ -379,6 +402,8 @@ def layer3_pattern(d, peers, subtotal):
         sub = sub.fillna(sub.median()).fillna(0)
         if len(sub) < MIN_GROUP_FOR_PATTERN:
             continue
+        # An Isolation Forest cuts the data at random; an unusual taxpayer is cut off from the
+        # rest in fewer cuts. score_samples is lower for more unusual, hence the minus sign.
         forest = IsolationForest(n_estimators=200, random_state=SEED).fit(sub)
         pct.loc[idx] = pd.Series(-forest.score_samples(sub), index=idx).rank(pct=True)
         # What: for a flagged taxpayer, the two inputs on which it sits furthest from its peers,
@@ -397,13 +422,12 @@ def layer3_pattern(d, peers, subtotal):
                 show[c][1].format(v=_show(d.at[i, show[c][0]], show[c][2]))
                 + f' (similar importers: {_show(med[c], show[c][2])}'
                 + ('; already counted in the score)' if c in scored else ')') for c in top) + '.'
-    layer3_pattern.evidence = evidence
 
     # Low agreement: scorecard and pattern check point opposite ways
     s_pct = subtotal.rank(pct=True)
     low = ((s_pct < LOW_AGREE['score_low']) & (pct > LOW_AGREE['pattern_high'])) | \
           ((s_pct > LOW_AGREE['score_high']) & (pct < LOW_AGREE['pattern_low']))
-    return pct, low
+    return pct, low, evidence
 
 
 # =========================================================================================
@@ -485,18 +509,23 @@ NOT_GROUPED = 'Not grouped (fewer than 10 declarations)'
 
 
 def score_snapshot(raw):
+    """Track A for one extract (one row per taxpayer in, one row per taxpayer out). See the steps
+    in the module docstring; each step below is marked the same way."""
     snap = str(raw['snapshot_date'].iloc[0])[:10]
+    # ---- Step 1: prepare the rates (recency weighting, then small-count weighting) ----
     d = derive(raw)
     log = [f'Snapshot {snap}: {len(d):,} taxpayers, {int(d["adequate"].sum()):,} with '
            f'{ADEQUATE_ENTRIES}+ declarations']
 
-    # ---- the four layers ----
+    # ---- Step 2: points per parameter; their sum is the score before rounding ----
     points, available, _ = layer2_scorecard(d)
     subtotal = points.sum(axis=1)
+    # ---- Step 3: peer groups ----
     peers = layer1_peers(d, log)
-    pat_pct, low = layer3_pattern(d, peers, subtotal)
+    # ---- Step 4: pattern check (a note only: subtotal is NOT changed) ----
+    pat_pct, low, pattern_evidence = layer3_pattern(d, peers, subtotal)
 
-    # ---- L4: one row per taxpayer ----
+    # ---- Step 5 (L4): score, band and one row per taxpayer ----
     s = pd.DataFrame(index=d.index)
     s['taxpayer_tin'] = d['taxpayer_tin']
     s['snapshot_date'] = snap
@@ -505,7 +534,7 @@ def score_snapshot(raw):
     s['scorecard_points'] = subtotal.round(2)
     s['pattern_percentile'] = pat_pct.round(3)
     s['flag_unusual_pattern'] = np.where(pat_pct >= PATTERN_NOTE_PCT, 'Y', 'N')
-    s['pattern_evidence'] = layer3_pattern.evidence
+    s['pattern_evidence'] = pattern_evidence
     s['params_scored'] = available.sum(axis=1)
     s['params_total'] = available.shape[1]
     s['peer_group'] = peers['peer_group'].reindex(d.index).fillna(-1).astype(int)
