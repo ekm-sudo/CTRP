@@ -2,6 +2,9 @@
 
 The Customs Taxpayer Risk Profiling model, explained from the ground up.
 
+For a file-by-file reading guide with line numbers, see `docs/CODE_WALKTHROUGH.md`. To see every step on made-up
+data, run `python notebooks/walkthrough_demo.py`.
+
 Each section has two parts:
 
 - **Simple version**: written for a 10-year-old. No prior knowledge assumed.
@@ -136,7 +139,11 @@ hurts much more. Here the most important subject is "How often were you topped u
 
 **Weight = (L × I) / Σ(L × I)**. L is likelihood and I is impact, each rated 1 to 5. The total of L × I is 76.
 Data Science set these working ratings from the back-test evidence (D41). They are still **provisional** until
-the Risk Officers confirm them.
+the Risk Officers confirm them. They are **fixed**, not dynamic: nothing in the code learns or updates them. They
+change only when someone edits `PARAMS`, and the settings fingerprint then changes too.
+
+How PAR_045T gets 33 points: its L × I is 5 × 5 = 25, and 25 / 76 = 0.329, so it is worth up to 32.9 of the 100
+points.
 
 ### 3.2 Turning a rate into points (the ramp)
 
@@ -409,8 +416,9 @@ Each company gets a behaviour percentile and two reasons, such as "Value below t
 of similar importers." The top 5% of clean-record regular companies, and the top 1% of clean-record small ones, get
 a **Risky Behaviour Flag**.
 
-Then the two tracks are combined. The final colour, the **Overall Risk Band**, is the worse of the two, with one
-safety rule. Because Track B is new and hasn't been checked by officers yet, it can push a company up to HIGH but
+Then the two tracks are combined. The final colour, the **Overall Risk Band**, takes whichever track says
+"riskier." This does not mean Track B is the worse track. It means a clean history can't hide worrying behaviour.
+There is one safety rule. Because Track B is new and hasn't been checked by officers yet, it can push a company up to HIGH but
 never to VERY HIGH.
 
 #### Technical version
@@ -644,7 +652,8 @@ note that the settings are provisional.
 We clean the data. For each company, we count how often it was caught paying too little, how often it changed its
 forms, and a few other things, with recent years counting more and tiny records nudged towards average. Those
 become points out of 100 and a coloured band, with reasons in plain words. Separately, Track B looks only at
-behaviour, to find companies that were never caught but act strangely. The final band is the worse of the two. We
+behaviour, to find companies that were never caught but act strangely. The final band takes whichever track says
+"riskier." We
 graded everything by pretending it was the past and checking what really happened. We held a competition against
 about ten other methods. The scorecard won because it is nearly as good as the best and anyone can understand it.
 

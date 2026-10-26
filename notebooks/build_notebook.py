@@ -877,7 +877,7 @@ PAT = {}
 for snap in ex:
     dd = D[snap]
     peers = M.layer1_peers(dd, [])
-    pctl_, low = M.layer3_pattern(dd, peers, SUB[snap])
+    pctl_, low, _ = M.layer3_pattern(dd, peers, SUB[snap])
     PAT[snap] = dict(adj=tested_points(pctl_, peers, dd), pct=pctl_)
 pl = PAT[latest]['pct']
 unusual = d['adequate'] & (pl >= 0.9)
