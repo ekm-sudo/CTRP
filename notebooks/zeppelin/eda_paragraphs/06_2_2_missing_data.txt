@@ -1,0 +1,34 @@
+%pyspark
+BLANK_MEANS = {'taxpayer_tin': 'No taxpayer: the row is dropped (R1, E03)',
+               'entry_num': 'No entry number: the declaration ID is used as the entry key',
+               'clearance_station_cd': 'No station: counted as a station of its own in the station measures',
+               'dec_ref_yer': 'No year: the declaration ID is used as the entry key',
+               'decl_status': 'No status: the row is dropped with the cancelled ones (R3)',
+               'regime_cd': 'No regime: the row is dropped (R4)',
+               'hsc_cd': 'No tariff code: no price or duty benchmark for the item; it still counts in its declaration',
+               'gds_org_cty': 'No origin: the item is compared with the benchmark for its HS code across all origins',
+               'cpc_cd': 'No APC: not counted as exempt, and left out of the duty comparison (that uses APC 000 only)',
+               'customs_value': 'No value: left out of the price, duty and APC features (E11)',
+               'net_weight': 'No weight: left out of the price features (E11)',
+               'supplementary_qnty': 'No units: the price is compared per kg only',
+               'tax_assessed': 'No item tax: left out of the duty features',
+               'original_tax_amt': 'Read as unchanged: the final tax is used (E08)',
+               'final_amt': 'No final tax: no top-up or tax reduction can be counted',
+               'top_up_amt': 'Not used by the model (E09)',
+               'top_up_flg': 'Read as no top-up',
+               'amendment_flg': 'Read as not amended',
+               'pay_status': 'Read as not unpaid',
+               'preferential_treatment_flag': 'Read as no preference claimed',
+               'is_red_flg': 'Read as not red (used only for outcomes)',
+               'is_yellow_flg': 'Read as not yellow (used only for outcomes)',
+               'assessment_dt_wid': 'No date: outside every window, so not used'}
+columns = TEXT + NUMBERS + LANES
+blank = eda.select([F.avg(F.col(c).isNull().cast('double')).alias(c) for c in columns]).first().asDict()
+zero = eda.select([F.avg((F.col(c) <= 0).cast('double')).alias(c) for c in NUMBERS]).first().asDict()
+missing = pd.DataFrame({
+    'column': columns,
+    'blank %': [round(100 * blank[c], 2) for c in columns],
+    'zero or less, % of filled rows': [round(100 * zero[c], 2) if c in zero else None for c in columns],
+    'what a blank means and what the model does': [BLANK_MEANS.get(c, '') for c in columns],
+})
+z.show(missing.sort_values('blank %', ascending=False))

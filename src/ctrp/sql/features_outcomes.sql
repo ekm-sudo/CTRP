@@ -8,6 +8,9 @@
 --
 -- Window
 --   history  : declarations after @@HIST_START@@ up to @@SNAP@@ (24 months)  -> features
+--   3 years  : declarations after @@HIST3_START@@ up to @@SNAP@@ (36 months) -> y1_/y2_/y3_ columns
+--              (counts per year before the snapshot, so recency weighting can be tested in
+--              Python without another pull; every other column still uses the 24 months)
 --   outcome  : declarations after @@SNAP@@ up to @@OUT_END@@                 -> out_* columns
 --   (for the live run the outcome window is empty and the out_* columns are 0)
 --
@@ -17,6 +20,10 @@
 --   R6  tax amounts once per declaration R7  top-up = flag Y AND final tax > original tax,
 --       amount = final - original (H2: top_up_amt holds the final tax on unflagged rows)
 --   R13 APC 483 excluded (destroyed or abandoned declarations, dummy reconciliation entries)
+--   R14 one declaration per entry: entry key = entry number + station + year. If one entry has
+--       more than one declaration ID, only the latest (highest) is kept
+--   R15 motor vehicles left out: any declaration with an item in HS headings @@MV_HEADINGS_TEXT@@
+--       (they have their own model)
 --   Original tax is blank on many unamended declarations: blank means unchanged, so it is
 --   filled with the final tax.
 --
@@ -36,10 +43,24 @@ WITH p AS (
 -- What: item rows in the window, cleaned (rules R1 to R13), each item numbered once.
 -- Why:  the view repeats some items many times, so duplicates must go before any count.
 raw AS (
-  SELECT v.*,
-         ROW_NUMBER() OVER (PARTITION BY v.instance_id, v.key_itm_nbr ORDER BY v.assessment_dt_wid) AS rn
+  -- only the 24 columns the model uses, so Spark moves far less data in every step
+  SELECT v.instance_id, v.key_itm_nbr, v.assessment_dt_wid, v.taxpayer_tin,
+         v.regime_cd, v.decl_status, v.cpc_cd, v.extended_proc_cd,
+         v.hsc_cd, v.gds_org_cty, v.customs_value, v.net_weight,
+         v.supplementary_qnty, v.tax_assessed, v.original_tax_amt, v.final_amt,
+         v.top_up_flg, v.amendment_flg, v.clearance_station_cd, v.is_red_flg,
+         v.is_yellow_flg, v.pay_status, v.consignee_tin, v.preferential_treatment_flag,
+         v.entry_num, v.dec_ref_yer,
+         ROW_NUMBER() OVER (PARTITION BY v.instance_id, v.key_itm_nbr ORDER BY v.assessment_dt_wid) AS rn,
+         -- R14 entry key = entry number + station + year (e.g. C12345UGKLA2026). One entry can sit under
+         --     more than one declaration ID, and only its latest declaration ID (the highest) is kept.
+         MAX(lpad(v.instance_id, 20, '0')) OVER (PARTITION BY COALESCE(concat(v.entry_num, v.clearance_station_cd,
+             v.dec_ref_yer), v.instance_id))                                              AS latest_instance,
+         -- R15 motor vehicles: a declaration with any motor vehicle item is left out (separate MV model)
+         MAX(CASE WHEN substr(v.hsc_cd, 1, 4) IN (@@MV_HEADINGS@@) THEN 1 ELSE 0 END)
+             OVER (PARTITION BY v.instance_id)                                            AS has_vehicle
   FROM dm_modeled_ura_datascience.vw_cstm_AEO_model v
-  WHERE v.assessment_dt_wid >  '@@HIST_START@@'
+  WHERE v.assessment_dt_wid >  '@@HIST3_START@@'
     AND v.assessment_dt_wid <= '@@OUT_END@@'
     AND v.regime_cd IN ('IM4', 'IM7')
     AND v.decl_status <> 'Cancelled'
@@ -53,11 +74,13 @@ items AS (
   SELECT r.*, to_date(r.assessment_dt_wid, 'yyyyMMdd') AS adate
   FROM raw r
   WHERE r.rn = 1
+    AND lpad(r.instance_id, 20, '0') = r.latest_instance   -- R14 latest declaration ID per entry
+    AND r.has_vehicle = 0                                   -- R15 no motor vehicle declarations
 ),
 
 -- What: items in the 24-month history only (features are built from history, never the future).
 hist_items AS (
-  SELECT * FROM items WHERE assessment_dt_wid <= '@@SNAP@@'
+  SELECT * FROM items WHERE assessment_dt_wid > '@@HIST_START@@' AND assessment_dt_wid <= '@@SNAP@@'
 ),
 
 -- ---------- one row per declaration ---------------------------------------------------
@@ -93,7 +116,7 @@ decl AS (
   FROM decl_all d
 ),
 
-hist AS (SELECT * FROM decl WHERE dt <= '@@SNAP@@'),
+hist AS (SELECT * FROM decl WHERE dt > '@@HIST_START@@' AND dt <= '@@SNAP@@'),
 fut  AS (SELECT * FROM decl WHERE dt >  '@@SNAP@@'),
 
 -- ---------- scored parameters and pattern features from declarations ------------------
@@ -133,6 +156,49 @@ tp AS (
          AVG(CASE WHEN h.yellow = 1 THEN 1.0 ELSE 0.0 END)                AS ctx_yellow_lane_rate
   FROM hist h
   CROSS JOIN p
+  GROUP BY h.tin
+),
+
+-- ---------- the same counts per year, over 3 years (for recency weighting) ---------------
+-- What: for each of the 3 years before the snapshot (y1 = most recent 12 months, y2 = the 12
+--       before, y3 = the 12 before that): declarations, and how many were topped up, severely
+--       topped up, amended or had tax reduced, with the top-up and original tax amounts.
+-- Why:  a recency-weighted rate is (w1 x count1 + w2 x count2 + w3 x count3) / (the same for
+--       declarations), so these counts let any weights be tried in Python without another pull.
+--       Check: y1 + y2 declarations always equal entries_24m.
+yr AS (
+  SELECT h.tin,
+         SUM(CASE WHEN h.yb = 1 THEN 1 ELSE 0 END)                         AS y1_entries,
+         SUM(CASE WHEN h.yb = 1 THEN h.topped_up ELSE 0 END)               AS y1_topped_up,
+         SUM(CASE WHEN h.yb = 1 THEN h.severe ELSE 0 END)                  AS y1_severe,
+         SUM(CASE WHEN h.yb = 1 AND h.amended = 'Y' THEN 1 ELSE 0 END)     AS y1_amended,
+         SUM(CASE WHEN h.yb = 1 THEN h.negative_top_up ELSE 0 END)         AS y1_tax_reduced,
+         SUM(CASE WHEN h.yb = 1 THEN h.top_up ELSE 0 END)                  AS y1_top_up_ugx,
+         SUM(CASE WHEN h.yb = 1 THEN h.orig_tax ELSE 0 END)                AS y1_original_tax_ugx,
+         SUM(CASE WHEN h.yb = 2 THEN 1 ELSE 0 END)                         AS y2_entries,
+         SUM(CASE WHEN h.yb = 2 THEN h.topped_up ELSE 0 END)               AS y2_topped_up,
+         SUM(CASE WHEN h.yb = 2 THEN h.severe ELSE 0 END)                  AS y2_severe,
+         SUM(CASE WHEN h.yb = 2 AND h.amended = 'Y' THEN 1 ELSE 0 END)     AS y2_amended,
+         SUM(CASE WHEN h.yb = 2 THEN h.negative_top_up ELSE 0 END)         AS y2_tax_reduced,
+         SUM(CASE WHEN h.yb = 2 THEN h.top_up ELSE 0 END)                  AS y2_top_up_ugx,
+         SUM(CASE WHEN h.yb = 2 THEN h.orig_tax ELSE 0 END)                AS y2_original_tax_ugx,
+         SUM(CASE WHEN h.yb = 3 THEN 1 ELSE 0 END)                         AS y3_entries,
+         SUM(CASE WHEN h.yb = 3 THEN h.topped_up ELSE 0 END)               AS y3_topped_up,
+         SUM(CASE WHEN h.yb = 3 THEN h.severe ELSE 0 END)                  AS y3_severe,
+         SUM(CASE WHEN h.yb = 3 AND h.amended = 'Y' THEN 1 ELSE 0 END)     AS y3_amended,
+         SUM(CASE WHEN h.yb = 3 THEN h.negative_top_up ELSE 0 END)         AS y3_tax_reduced,
+         SUM(CASE WHEN h.yb = 3 THEN h.top_up ELSE 0 END)                  AS y3_top_up_ugx,
+         SUM(CASE WHEN h.yb = 3 THEN h.orig_tax ELSE 0 END)                AS y3_original_tax_ugx,
+         DATEDIFF(MAX(h.snap), MAX(CASE WHEN h.topped_up = 1 THEN h.adate END)) AS days_since_last_top_up_36m
+  FROM (
+    SELECT d.*, p.snap,
+           CASE WHEN d.adate > add_months(p.snap, -12) THEN 1
+                WHEN d.adate > add_months(p.snap, -24) THEN 2 ELSE 3 END   AS yb,
+           CASE WHEN d.topped_up = 1 AND d.top_up >= 0.30 * d.final_tax THEN 1 ELSE 0 END AS severe
+    FROM decl d
+    CROSS JOIN p
+    WHERE d.dt <= '@@SNAP@@'
+  ) h
   GROUP BY h.tin
 ),
 
@@ -413,6 +479,10 @@ SELECT tp.tin                                                  AS taxpayer_tin,
        tp.days_since_first_in_window,
        CASE WHEN pr.tin IS NULL THEN 'Y' ELSE 'N' END          AS new_trader,
        tp.ctx_unpaid_rate, tp.ctx_red_lane_rate, tp.ctx_yellow_lane_rate, s.ctx_preferential_use_rate,
+       yr.y1_entries, yr.y1_topped_up, yr.y1_severe, yr.y1_amended, yr.y1_tax_reduced, yr.y1_top_up_ugx, yr.y1_original_tax_ugx,
+       yr.y2_entries, yr.y2_topped_up, yr.y2_severe, yr.y2_amended, yr.y2_tax_reduced, yr.y2_top_up_ugx, yr.y2_original_tax_ugx,
+       yr.y3_entries, yr.y3_topped_up, yr.y3_severe, yr.y3_amended, yr.y3_tax_reduced, yr.y3_top_up_ugx, yr.y3_original_tax_ugx,
+       yr.days_since_last_top_up_36m,
        COALESCE(o.out_entries, 0)            AS out_entries,
        COALESCE(o.out_checked, 0)            AS out_checked,
        COALESCE(o.out_checked_hits, 0)       AS out_checked_hits,
@@ -430,3 +500,4 @@ LEFT JOIN duty_tp du  ON du.tin = tp.tin
 LEFT JOIN apc_tp ap   ON ap.tin = tp.tin
 LEFT JOIN split_tp sp ON sp.tin = tp.tin
 LEFT JOIN prior pr    ON pr.tin = tp.tin
+LEFT JOIN yr          ON yr.tin = tp.tin

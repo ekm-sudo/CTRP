@@ -78,7 +78,8 @@ def paired_diff_ci(raw, a, b, share=0.05, reps=300, seed=42):
     n = len(raw)
     out = []
     for _ in range(reps):
-        i = rng.integers(0, n, n)
-        r_, a_, b_ = raw.iloc[i].reset_index(drop=True), a.iloc[i].reset_index(drop=True), b.iloc[i].reset_index(drop=True)
-        out.append(lift(r_, a_, share) - lift(r_, b_, share))
+        i = rng.integers(0, n, n)                      # one resample of the taxpayers
+        raw_i = raw.iloc[i].reset_index(drop=True)
+        a_i, b_i = a.iloc[i].reset_index(drop=True), b.iloc[i].reset_index(drop=True)
+        out.append(lift(raw_i, a_i, share) - lift(raw_i, b_i, share))
     return np.percentile(out, [5, 95])

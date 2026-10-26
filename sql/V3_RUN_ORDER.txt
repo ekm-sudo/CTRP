@@ -1,0 +1,45 @@
+CTRP version 3: Hue queries to run, in order
+==============================================================================
+Every query now carries three rules: one declaration per entry (entry number + station + year, latest
+declaration ID), no motor vehicle declarations (HS 8701 to 8708, 8711), no APC 483.
+Before saving anything:  python main.py v3 --archive   (moves the version 2 files away, deletes nothing)
+Run ONE query at a time, as ONE statement. Download as CSV, save under the name shown, tick the box.
+
+STEP 1  the long run: 18 test dates since 2017 (headline performance, bands)       12 queries
+------------------------------------------------------------------------------
+[ ] sql/long_run/if_too_big/long_run_2015.sql       save as data/long_run/long_run_2015.csv
+[ ] sql/long_run/if_too_big/long_run_2016.sql       save as data/long_run/long_run_2016.csv
+[ ] sql/long_run/if_too_big/long_run_2017.sql       save as data/long_run/long_run_2017.csv
+[ ] sql/long_run/if_too_big/long_run_2018.sql       save as data/long_run/long_run_2018.csv
+[ ] sql/long_run/if_too_big/long_run_2019.sql       save as data/long_run/long_run_2019.csv
+[ ] sql/long_run/if_too_big/long_run_2020.sql       save as data/long_run/long_run_2020.csv
+[ ] sql/long_run/if_too_big/long_run_2021.sql       save as data/long_run/long_run_2021.csv
+[ ] sql/long_run/if_too_big/long_run_2022.sql       save as data/long_run/long_run_2022.csv
+[ ] sql/long_run/if_too_big/long_run_2023.sql       save as data/long_run/long_run_2023.csv
+[ ] sql/long_run/if_too_big/long_run_2024.sql       save as data/long_run/long_run_2024.csv
+[ ] sql/long_run/if_too_big/long_run_2025.sql       save as data/long_run/long_run_2025.csv
+[ ] sql/long_run/if_too_big/long_run_2026.sql       save as data/long_run/long_run_2026.csv
+STEP 2  the full extracts: all features, Track A and Track B, on 6 dates + live     7 queries
+        (about 30 minutes each; if one times out: python main.py sql --split <date>)
+------------------------------------------------------------------------------
+[ ] sql/bt_2023-09-30.sql                           save as data/bt_2023-09-30.csv
+[ ] sql/bt_2024-03-31.sql                           save as data/bt_2024-03-31.csv
+[ ] sql/bt_2024-09-30.sql                           save as data/bt_2024-09-30.csv
+[ ] sql/bt_2025-03-31.sql                           save as data/bt_2025-03-31.csv
+[ ] sql/bt_2025-09-30.sql                           save as data/bt_2025-09-30.csv
+[ ] sql/bt_2026-03-31.sql                           save as data/bt_2026-03-31.csv
+[ ] sql/live_2026-09-30.sql                         save as data/live_2026-09-30.csv
+STEP 3  the NTC missed-revenue workbook                                             2 queries
+------------------------------------------------------------------------------
+[ ] sql/audit/audit_02_below_peers_since_july.sql   save as data/audit/below_peers_since_july.csv
+[ ] sql/audit/audit_03_totals_since_july.sql        save as data/audit/totals_since_july.csv
+
+Then:  python main.py v3 --rebuild     (every result again, and results/CTRP_v3_against_v2.xlsx)
+
+LATER, when needed
+------------------------------------------------------------------------------
+EDA issue workbooks for the officers (13):  sql/eda_issues/E01 ... E13 -> data/eda_issues/E01.csv ...
+                                            then: python main.py issues
+Candidate parameters, add-on (11):          sql/long_run_addon/addon_2016 ... 2026 -> data/long_run_addon/
+                                            then: python main.py candidates
+Python feature notebook (7):                sql/python_features/raw_items_1 ... 6, prior_tins -> data/python_features/

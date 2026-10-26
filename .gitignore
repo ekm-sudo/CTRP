@@ -6,6 +6,8 @@ results/
 *.xlsx
 # Generated queries can be rebuilt with: python main.py sql
 sql/*.sql
+# Review queries and lists contain TINs
+sql/review/
 # Connection details
 .env
 # Python, notebook and editor clutter
@@ -14,3 +16,6 @@ __pycache__/
 .pytest_cache/
 .ipynb_checkpoints/
 ~$*.docx
+
+# The story notebook shows TINs once run: keep only the builder (notebooks/build_story.py) in git
+notebooks/CTRP_story.ipynb

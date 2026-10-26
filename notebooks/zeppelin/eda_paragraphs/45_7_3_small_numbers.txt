@@ -1,0 +1,51 @@
+%pyspark
+def credibility(rate, n, k=10):
+    # Pull a rate towards the average of everyone by weight n / (n + k), and only ever down
+    rate, n = rate.astype(float), n.fillna(0).astype(float)
+    has = rate.notna() & (n > 0)
+    average = (rate[has] * n[has]).sum() / n[has].sum()          # weighted by declarations (or items)
+    w = n / (n + k)
+    return np.minimum(rate, w * rate + (1 - w) * average)
+
+# Track A: the 8 scored features, each with the count it rests on.
+# Five use the 3-year (recency) version from 7.1, three stay at 24 months.
+TRACK_A = {'topped_up_per_decl_3y_rate': 'decl_24m_count',
+           'severe_top_up_per_decl_3y_rate': 'decl_24m_count',
+           'amended_per_decl_3y_rate': 'decl_24m_count',
+           'top_up_per_final_tax_3y_rate': 'decl_24m_count',
+           'peer_price_shortfall_per_value_24m_rate': 'priced_items_24m_count',
+           'tax_reduced_per_decl_3y_rate': 'decl_24m_count',
+           'top_up_last_180d_flag': 'decl_24m_count',
+           'away_from_main_station_per_decl_24m_rate': 'decl_24m_count'}
+
+final = tp[['taxpayer_tin', 'taxpayer_nm', 'decl_24m_count', 'customs_value_24m_ugx', 'top_up_24m_ugx']].copy()
+final.insert(1, 'snapshot_date', SNAPSHOT)
+for col, n in TRACK_A.items():
+    final['raw_' + col] = tp[col]                        # before the small-numbers step (shown in reasons)
+    final[col] = credibility(tp[col], tp[n])             # what the scorecard reads
+
+# Track B: 17 features, all over 24 months. The five rates resting on a count get the same small-numbers step.
+TRACK_B = {'amended_per_decl_24m_rate': 'decl_24m_count',
+           'unpaid_tax_per_decl_24m_rate': 'decl_24m_count',
+           'price_keying_error_per_item_24m_rate': 'priced_items_24m_count',
+           'peer_price_shortfall_per_value_24m_rate': 'priced_items_24m_count',
+           'price_under_half_peer_per_item_24m_rate': 'priced_items_24m_count',
+           'median_price_dev_from_peer_24m_log': None,
+           'own_price_drop_per_recent_value_6m_rate': None,
+           'duty_under_half_peer_per_value_24m_rate': None,
+           'duty_gap_vs_peer_per_value_24m_rate': None,
+           'exempt_apc_per_value_24m_rate': None,
+           'watchlist_apc_per_value_24m_rate': None,
+           'pref_claimed_per_item_24m_rate': None,
+           'decl_90d_per_avg_qtr_24m_log': None,
+           'away_from_main_station_per_decl_24m_rate': None,
+           'hs4_per_decl_24m_ratio': None,
+           'same_day_split_per_decl_vs_norm_24m_diff': None,
+           'new_importer_24m_score': None}
+for col, n in TRACK_B.items():
+    final['b_' + col] = credibility(tp[col], tp[n]) if n else tp[col].astype(float)
+
+example = pd.DataFrame({'declarations': tp['decl_24m_count'],
+                        'amended, raw': final['raw_amended_per_decl_3y_rate'],
+                        'amended, after the small-numbers step': final['amended_per_decl_3y_rate']})
+z.show(example.sort_values('declarations').head(10))

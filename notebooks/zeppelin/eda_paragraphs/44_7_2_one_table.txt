@@ -1,0 +1,7 @@
+%pyspark
+# Every part side by side: one row per taxpayer (small enough to work on in pandas from here)
+feature_inputs = reduce(lambda table, part: table.join(part, 'taxpayer_tin', 'left'), parts.values(), base)
+save(feature_inputs, 'ctrp_feature_inputs')
+tp = feature_inputs.orderBy('taxpayer_tin').toPandas()
+print('{:,} taxpayers x {} columns'.format(*tp.shape))
+peek(tp)

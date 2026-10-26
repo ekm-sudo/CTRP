@@ -1,0 +1,7 @@
+%pyspark
+# Each feature at a glance: how many taxpayers have it, its middle value and its top 5%
+cols = list(TRACK_A) + ['b_' + c for c in TRACK_B]
+z.show(pd.DataFrame({'feature': cols,
+                     'taxpayers with a value': [int(final_dataset[c].notna().sum()) for c in cols],
+                     'median': [final_dataset[c].median() for c in cols],
+                     '95th percentile': [final_dataset[c].quantile(0.95) for c in cols]}))

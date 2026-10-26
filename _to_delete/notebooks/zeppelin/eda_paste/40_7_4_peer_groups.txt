@@ -1,0 +1,39 @@
+%pyspark
+SECTIONS = [(1, 5, 'Live animals'), (6, 14, 'Vegetable products'), (15, 15, 'Fats and oils'),
+            (16, 24, 'Food, drink, tobacco'), (25, 27, 'Minerals and fuel'), (28, 38, 'Chemicals'),
+            (39, 40, 'Plastics and rubber'), (41, 43, 'Hides and leather'), (44, 46, 'Wood'),
+            (47, 49, 'Paper'), (50, 63, 'Textiles'), (64, 67, 'Footwear'), (68, 70, 'Stone, glass'),
+            (71, 71, 'Precious metals'), (72, 83, 'Base metals'), (84, 85, 'Machinery, electrical'),
+            (86, 89, 'Vehicles'), (90, 92, 'Instruments'), (93, 93, 'Arms'),
+            (94, 96, 'Miscellaneous manufactures'), (97, 99, 'Art and other')]
+
+def hs_section(chapter):
+    # HS chapter (for example '61') -> its section (for example 'Textiles')
+    try:
+        c = int(float(chapter))
+    except (TypeError, ValueError):
+        return 'Unknown'
+    return next((name for low, high, name in SECTIONS if low <= c <= high), 'Unknown')
+
+def size_tier(log_value):
+    # Small, medium, large: thirds by customs value within the section
+    if len(log_value) < 3:
+        return pd.Series('small', index=log_value.index)
+    return pd.qcut(log_value.rank(method='first'), 3, labels=['small', 'medium', 'large']).astype(str)
+
+# Main goods = the HS chapter with most of the taxpayer's customs value in the 24 months
+chapter = F.substring('hsc_cd', 1, 2).alias('chapter')
+by_chapter = hist_items.groupBy('taxpayer_tin', chapter).agg(F.sum('customs_value').alias('v'))
+largest_first = Window.partitionBy('taxpayer_tin').orderBy(F.desc('v'))
+main_chapter = (by_chapter.withColumn('rank', F.row_number().over(largest_first))
+                          .where('rank = 1').select('taxpayer_tin', F.col('chapter').alias('dominant_hs_chapter')))
+final = final.merge(main_chapter.toPandas(), on='taxpayer_tin', how='left')
+
+section = final['dominant_hs_chapter'].map(hs_section).fillna('Unknown')
+log_value = np.log1p(final['total_customs_value'].clip(lower=0))
+final['peer_group'] = section + ', ' + log_value.groupby(section).transform(size_tier)
+
+for col in TRACK_B:
+    final['b_' + col + '_pct'] = final['b_' + col].groupby(final['peer_group']).rank(pct=True).fillna(0.5)
+
+z.show(final['peer_group'].value_counts().rename_axis('peer group').reset_index(name='taxpayers'))

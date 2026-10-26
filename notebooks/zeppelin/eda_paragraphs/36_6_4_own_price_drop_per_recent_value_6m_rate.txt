@@ -1,0 +1,20 @@
+%pyspark
+six_months_back = F.add_months(snap_date, -6)
+late, early = F.col('adate') > six_months_back, F.col('adate') <= six_months_back
+own = (priced.withColumn('early_kg', F.when(early, F.col('price_kg')))
+             .withColumn('late_kg', F.when(late, F.col('price_kg')))
+             .withColumn('early_u', F.when(early, F.col('price_unit')))
+             .withColumn('late_u', F.when(late, F.col('price_unit')))
+             .groupBy('taxpayer_tin', 'hsc_cd')
+             .agg(median('early_kg').alias('early_kg'), median('late_kg').alias('late_kg'),
+                  median('early_u').alias('early_u'), median('late_u').alias('late_u'),
+                  F.sum(F.when(late, F.col('customs_value')).otherwise(0)).alias('late_value'),
+                  F.sum(early.cast('int')).alias('n_early'), F.sum(late.cast('int')).alias('n_late')))
+own = own.where((F.col('n_early') >= 2) & (F.col('n_late') >= 1) & (F.col('early_kg') > 0))
+
+dropped = ((F.col('late_kg') < 0.7 * F.col('early_kg'))
+           & (F.col('early_u').isNull() | F.col('late_u').isNull() | (F.col('late_u') < 0.7 * F.col('early_u'))))
+parts['own_price_drop_per_recent_value_6m_rate'] = own.groupBy('taxpayer_tin').agg(
+    F.count('*').alias('hs_codes_compared_count'),
+    (F.sum(F.when(dropped, F.col('late_value')).otherwise(0)) / F.sum('late_value')).alias('own_price_drop_per_recent_value_6m_rate'))
+peek(own)

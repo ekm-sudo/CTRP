@@ -1,0 +1,24 @@
+%pyspark
+TEXT = ['instance_id', 'entry_num', 'dec_ref_yer', 'clearance_station_cd', 'taxpayer_tin', 'taxpayer_nm',
+        'consignee_tin', 'consignee_nm', 'hsc_cd', 'gds_org_cty', 'cpc_cd', 'extended_proc_cd', 'regime_cd',
+        'decl_status', 'pay_status', 'key_itm_nbr', 'top_up_flg', 'amendment_flg', 'preferential_treatment_flag',
+        'assessment_dt_wid']
+NUMBERS = ['customs_value', 'net_weight', 'supplementary_qnty', 'tax_assessed', 'original_tax_amt', 'final_amt',
+           'top_up_amt']
+LANES = ['is_red_flg', 'is_yellow_flg']
+
+v = spark.table(VIEW)
+rows = (v.select([F.col(c).cast('string').alias(c) for c in TEXT]
+                 + [F.col(c).cast('double').alias(c) for c in NUMBERS]
+                 + [F.col(c).cast('int').alias(c) for c in LANES])
+         .where((F.col('assessment_dt_wid') > HIST3_START) & (F.col('assessment_dt_wid') <= OUT_END))
+         .withColumn('adate', F.to_date('assessment_dt_wid', 'yyyyMMdd'))
+         .withColumn('entry_key', F.coalesce(F.concat('entry_num', 'clearance_station_cd', 'dec_ref_yer'),
+                                             F.col('instance_id'))))
+if SAMPLE_1_IN:
+    rows = rows.where(F.pmod(F.hash('taxpayer_tin'), SAMPLE_1_IN) == 0)
+rows = rows.cache()
+
+n_loaded = rows.count()
+print('Item rows loaded: {:,}'.format(n_loaded))
+peek(rows)

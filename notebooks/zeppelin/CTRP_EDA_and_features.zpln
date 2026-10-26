@@ -1,0 +1,2671 @@
+{
+  "paragraphs": [
+    {
+      "title": "Title",
+      "text": "%md\n# CTRP: data exploration (EDA) and features\n\n**Customs Taxpayer Risk Profiling Model.** Data Science Section, ITID. For review and sign-off.\n\nThis note starts from the raw rows of the customs view and shows, step by step, what we found in the data,\nhow we cleaned it, and how each feature is built and why. Everything runs here, on the full view.\n\n| Part | What happens | What it gives |\n|---|---|---|\n| 1 | Load the rows of the view | |\n| 2 | Explore them: missing data, duplicates, and the data problems found | one table per problem for the Risk Officers |\n| 3 | Clean them with the agreed rules (R1 to R15) | the cleaning log |\n| 4 | From item rows to declarations | |\n| 5 | Track A: the 8 compliance history features (the scorecard) | |\n| 6 | Track B: the 17 behaviour features (the Risky Behaviour Flag) | |\n| 7 | Steps after the features: recency, small numbers, peer groups | |\n| 8 | The final dataset, and a check against production | the final dataset |\n\n**22 features.** Track A has 8 and Track B has 17. Three are used by both (declarations amended, value below\nother importers, clearing away from the main station), so there are 22 different features.\n\n**How the features are named.** Each name says what is measured, per what, over which window, and ends with the\nunit. Example: `topped_up_per_decl_3y_rate` = declarations topped up, per declaration, over 3 years, as a rate.\nShort forms: `decl` declaration, `peer` the middle price of other importers, `hs4` HS heading, `coo` country of\norigin, `exempt` exemption, `pref` preferential, `dev` deviation, `avg` average, `qtr` quarter. Windows: `3y`\n(3 years, recent years count more), `24m`, `6m`, `90d`, `180d`. Units: `rate`, `flag` (1 or 0), `log`, `ratio`,\n`diff`, `score`, `count`, `ugx`. Track B columns start with `b_`; a percentile ends with `pct`.\n\n**How to run.** Run the paragraphs from top to bottom (or \"Run all\"). Only the **Settings** paragraph is meant\nto be edited. Each result is kept as a table in this Spark session (names start with `ctrp_`), so it can be\nlooked at with `%sql` in a new paragraph. Contains TINs: internal use only.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_000",
+      "id": "paragraph_ctrp_eda_000",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "Settings",
+      "text": "%pyspark\n# ===================== Settings: the only paragraph to edit =====================\nSNAPSHOT = '2026-09-30'          # the day the risk profile is made (the last day of a month)\nWITH_OUTCOMES = False              # True for a past snapshot: adds what happened in the 6 months after it\nSAMPLE_1_IN = None                 # e.g. 20 = a quick trial on 1 in 20 taxpayers. None = every taxpayer\n\n# The agreed cleaning rules that can be switched (all on)\nEXCLUDE_APC_483 = True              # R13 APC 483: destroyed or abandoned goods, dummy entries\nLATEST_DECLARATION_PER_ENTRY = True    # R14 one declaration per entry (entry number + station + year)\nEXCLUDE_MOTOR_VEHICLES = True          # R15 motor vehicles have their own model\nMOTOR_VEHICLE_HEADINGS = ['8701', '8702', '8703', '8704', '8705', '8706', '8707', '8708', '8711']\n\n# Where results go. Every result is always kept as a table in this session.\nSAVE_TO_FOLDER = False             # True: also write CSV files under OUT_DIR (needs a folder you can write to)\nOUT_DIR = '/user/CHANGE_ME/ctrp_eda'\nSAVE_TO_SCHEMA = None              # e.g. 'my_sandbox': also save as Hive tables (download from Hue as Excel)\nPRODUCTION_TABLE = None            # optional, for Part 8.2: a table holding the production extract for SNAPSHOT\n\nVIEW = 'dm_modeled_ura_datascience.vw_cstm_AEO_model'",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_001",
+      "id": "paragraph_ctrp_eda_001",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "Setup",
+      "text": "%pyspark\n# ===================== Setup: libraries, dates and small helpers (no need to edit) =====================\nimport calendar, datetime\nfrom functools import reduce\nfrom pyspark.sql import functions as F, Window\nimport numpy as np\nimport pandas as pd\n\ndef as_date(date_text):\n    return datetime.datetime.strptime(date_text, '%Y-%m-%d').date()\n\ndef month_end(date_text, months):\n    # The last day of the month `months` away from the date (negative = earlier)\n    d = as_date(date_text)\n    y, m = divmod(d.year * 12 + d.month - 1 + months, 12)\n    return datetime.date(y, m + 1, calendar.monthrange(y, m + 1)[1])\n\ndef ymd(d):\n    return d.strftime('%Y%m%d')       # dates in the view are text like '20260930'\n\n# The windows, all counted back from the snapshot\nSNAP = ymd(as_date(SNAPSHOT))\nHIST_START = ymd(month_end(SNAPSHOT, -24))     # features use the 24 months before the snapshot\nHIST3_START = ymd(month_end(SNAPSHOT, -36))    # recency weighting uses 3 years\nPRIOR_START = ymd(month_end(SNAPSHOT, -60))    # \"new trader\": nothing in the 3 years before the 24 months\nOUT_END = ymd(month_end(SNAPSHOT, 6)) if WITH_OUTCOMES else SNAP\nsnap_date = F.to_date(F.lit(SNAPSHOT))\n\ndef median(column_sql):\n    # The middle value, as the production query computes it (Spark's percentile_approx)\n    return F.expr('percentile_approx(%s, 0.5)' % column_sql)\n\ndef peek(df, n=10):\n    # Show the first rows of a result\n    z.show(df.head(n) if isinstance(df, pd.DataFrame) else df.limit(n))\n\ndef save(df, name):\n    # Keep a result as a table in this session, and as CSV files or a Hive table when switched on\n    if isinstance(df, pd.DataFrame):\n        df = spark.createDataFrame(df)\n    df.createOrReplaceTempView(name)\n    if SAVE_TO_FOLDER:\n        df.coalesce(1).write.mode('overwrite').option('header', True).csv(OUT_DIR + '/' + name)\n    if SAVE_TO_SCHEMA:\n        df.write.mode('overwrite').saveAsTable(SAVE_TO_SCHEMA + '.' + name)\n\nprint('Snapshot:', SNAPSHOT)\nprint('Features use declarations after', HIST_START, 'up to', SNAP, '(24 months)')\nprint('Recency uses declarations after', HIST3_START, '(36 months)')\nprint('Outcomes:', ('after ' + SNAP + ' up to ' + OUT_END) if WITH_OUTCOMES else 'none (live snapshot)')\nprint('Results kept in this session' + (', written to ' + OUT_DIR if SAVE_TO_FOLDER else '')\n      + (', saved in schema ' + SAVE_TO_SCHEMA if SAVE_TO_SCHEMA else ''))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_002",
+      "id": "paragraph_ctrp_eda_002",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "1. Load",
+      "text": "%md\n## 1. Load the rows of the view\n\nEach row of the view is **one item on one declaration**: a declaration with 5 kinds of goods has 5 rows.\nWe take the columns below for the 3 years before the snapshot (all regimes, so the cleaning in Part 3 can\nshow what it removes), and give each column its type.\n\n| Type | Columns |\n|---|---|\n| Text (codes and IDs) | `instance_id` (declaration ID), `entry_num`, `dec_ref_yer` (year), `clearance_station_cd`, `taxpayer_tin`, `taxpayer_nm`, `consignee_tin`, `consignee_nm`, `hsc_cd` (tariff code), `gds_org_cty` (origin), `cpc_cd` (APC), `extended_proc_cd` (EPC), `regime_cd`, `decl_status`, `pay_status`, `key_itm_nbr` (item number) |\n| Yes or no (`Y` or `N`) | `top_up_flg`, `amendment_flg`, `preferential_treatment_flag` |\n| Lane (1 = selected) | `is_red_flg`, `is_yellow_flg` |\n| Numbers (UGX, kg, units) | `customs_value`, `net_weight`, `supplementary_qnty`, `tax_assessed`, `original_tax_amt`, `final_amt`, `top_up_amt` |\n| Date | `assessment_dt_wid` (text `yyyymmdd`), turned into a real date `adate` |\n\nTwo columns are added: `adate` (the date) and `entry_key`, the entry number + station + year\n(for example `C12345UGKLA2026`), which identifies an entry. Where any part is blank, the declaration ID is used.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_003",
+      "id": "paragraph_ctrp_eda_003",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "1.1 Load",
+      "text": "%pyspark\nTEXT = ['instance_id', 'entry_num', 'dec_ref_yer', 'clearance_station_cd', 'taxpayer_tin', 'taxpayer_nm',\n        'consignee_tin', 'consignee_nm', 'hsc_cd', 'gds_org_cty', 'cpc_cd', 'extended_proc_cd', 'regime_cd',\n        'decl_status', 'pay_status', 'key_itm_nbr', 'top_up_flg', 'amendment_flg', 'preferential_treatment_flag',\n        'assessment_dt_wid']\nNUMBERS = ['customs_value', 'net_weight', 'supplementary_qnty', 'tax_assessed', 'original_tax_amt', 'final_amt',\n           'top_up_amt']\nLANES = ['is_red_flg', 'is_yellow_flg']\n\nv = spark.table(VIEW)\nrows = (v.select([F.col(c).cast('string').alias(c) for c in TEXT]\n                 + [F.col(c).cast('double').alias(c) for c in NUMBERS]\n                 + [F.col(c).cast('int').alias(c) for c in LANES])\n         .where((F.col('assessment_dt_wid') > HIST3_START) & (F.col('assessment_dt_wid') <= OUT_END))\n         .withColumn('adate', F.to_date('assessment_dt_wid', 'yyyyMMdd'))\n         .withColumn('entry_key', F.coalesce(F.concat('entry_num', 'clearance_station_cd', 'dec_ref_yer'),\n                                             F.col('instance_id'))))\nif SAMPLE_1_IN:\n    rows = rows.where(F.pmod(F.hash('taxpayer_tin'), SAMPLE_1_IN) == 0)\nrows = rows.cache()\n\nn_loaded = rows.count()\nprint('Item rows loaded: {:,}'.format(n_loaded))\npeek(rows)",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_004",
+      "id": "paragraph_ctrp_eda_004",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "1.2 Columns",
+      "text": "%pyspark\n# Each column: its type, an example, and how often it is blank\nblank = rows.select([F.avg(F.col(c).isNull().cast('double')).alias(c) for c in rows.columns]).first().asDict()\nexample = rows.limit(1000).toPandas()\noverview = pd.DataFrame({\n    'column': rows.columns,\n    'type': [t for _, t in rows.dtypes],\n    'example': [example[c].dropna().iloc[0] if example[c].notna().any() else None for c in rows.columns],\n    'blank %': [round(100 * blank[c], 1) for c in rows.columns],\n})\noverview['example'] = overview['example'].astype(str)\nz.show(overview)",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_005",
+      "id": "paragraph_ctrp_eda_005",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2. Explore",
+      "text": "%md\n## 2. Explore the rows (EDA)\n\nBefore building anything we look at what the data holds: how much there is, what is **missing**, what is\n**duplicated**, then values, goods, lanes and top-ups.\nThen we list every **data problem** we found. Each problem leads to a cleaning rule in Part 3 or a choice in the\nfeatures. The Risk Officers are asked to confirm each one (Part 2.7 gives them the rows behind each problem).\n\nThe exploration uses the same window as the features: IM4 and IM7 declarations in the 24 months before the\nsnapshot.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_006",
+      "id": "paragraph_ctrp_eda_006",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.1 Size",
+      "text": "%pyspark\neda = rows.where((F.col('assessment_dt_wid') > HIST_START) & (F.col('assessment_dt_wid') <= SNAP)\n                 & F.col('regime_cd').isin('IM4', 'IM7'))\n\n# How much data, per year (rows repeat items, so declarations and entries are counted as distinct IDs)\nsize = (eda.groupBy(F.substring('assessment_dt_wid', 1, 4).alias('year'))\n           .agg(F.count('*').alias('item_rows'),\n                F.countDistinct('instance_id').alias('declarations'),\n                F.countDistinct('entry_key').alias('entries'),\n                F.countDistinct('taxpayer_tin').alias('taxpayers'))\n           .orderBy('year'))\nz.show(size)",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_007",
+      "id": "paragraph_ctrp_eda_007",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.2 Missing data",
+      "text": "%md\n## 2.2 Missing data\n\nA blank (null) cell can mean \"not recorded\", \"not applicable\" or \"unchanged\". For each column the table gives the\nshare of rows that are blank, and for numbers the share that are zero or less. The last column says what a blank\nmeans for the model and what the model does with it. The next two tables check whether blanks are getting more or\nless common over time, and test our reading of the most important blank, the original tax (E08).",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_008",
+      "id": "paragraph_ctrp_eda_008",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.2 Missing data",
+      "text": "%pyspark\nBLANK_MEANS = {'taxpayer_tin': 'No taxpayer: the row is dropped (R1, E03)',\n               'entry_num': 'No entry number: the declaration ID is used as the entry key',\n               'clearance_station_cd': 'No station: counted as a station of its own in the station measures',\n               'dec_ref_yer': 'No year: the declaration ID is used as the entry key',\n               'decl_status': 'No status: the row is dropped with the cancelled ones (R3)',\n               'regime_cd': 'No regime: the row is dropped (R4)',\n               'hsc_cd': 'No tariff code: no price or duty benchmark for the item; it still counts in its declaration',\n               'gds_org_cty': 'No origin: the item is compared with the benchmark for its HS code across all origins',\n               'cpc_cd': 'No APC: not counted as exempt, and left out of the duty comparison (that uses APC 000 only)',\n               'customs_value': 'No value: left out of the price, duty and APC features (E11)',\n               'net_weight': 'No weight: left out of the price features (E11)',\n               'supplementary_qnty': 'No units: the price is compared per kg only',\n               'tax_assessed': 'No item tax: left out of the duty features',\n               'original_tax_amt': 'Read as unchanged: the final tax is used (E08)',\n               'final_amt': 'No final tax: no top-up or tax reduction can be counted',\n               'top_up_amt': 'Not used by the model (E09)',\n               'top_up_flg': 'Read as no top-up',\n               'amendment_flg': 'Read as not amended',\n               'pay_status': 'Read as not unpaid',\n               'preferential_treatment_flag': 'Read as no preference claimed',\n               'is_red_flg': 'Read as not red (used only for outcomes)',\n               'is_yellow_flg': 'Read as not yellow (used only for outcomes)',\n               'assessment_dt_wid': 'No date: outside every window, so not used'}\ncolumns = TEXT + NUMBERS + LANES\nblank = eda.select([F.avg(F.col(c).isNull().cast('double')).alias(c) for c in columns]).first().asDict()\nzero = eda.select([F.avg((F.col(c) <= 0).cast('double')).alias(c) for c in NUMBERS]).first().asDict()\nmissing = pd.DataFrame({\n    'column': columns,\n    'blank %': [round(100 * blank[c], 2) for c in columns],\n    'zero or less, % of filled rows': [round(100 * zero[c], 2) if c in zero else None for c in columns],\n    'what a blank means and what the model does': [BLANK_MEANS.get(c, '') for c in columns],\n})\nz.show(missing.sort_values('blank %', ascending=False))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_009",
+      "id": "paragraph_ctrp_eda_009",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.2 Missing data by year",
+      "text": "%pyspark\n# Is it getting better or worse? Blank % per year for the columns the model leans on\nWATCH = ['original_tax_amt', 'hsc_cd', 'gds_org_cty', 'supplementary_qnty', 'net_weight', 'tax_assessed', 'cpc_cd',\n         'entry_num', 'decl_status', 'clearance_station_cd']\nblank_pct = [F.round(100 * F.avg(F.col(c).isNull().cast('double')), 2).alias(c) for c in WATCH]\nz.show(eda.groupBy(F.substring('assessment_dt_wid', 1, 4).alias('year')).agg(*blank_pct).orderBy('year'))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_010",
+      "id": "paragraph_ctrp_eda_010",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.2 Original tax blank",
+      "text": "%pyspark\n# Test of \"blank original tax means unchanged\" (E08): if it is true, declarations WITH a top-up should almost\n# never have a blank original tax, because a top-up changes the tax\nper_declaration = eda.groupBy('instance_id').agg(F.max('top_up_flg').alias('flag'),\n                                                 F.max('original_tax_amt').alias('original_tax'))\nz.show(per_declaration\n       .groupBy(F.coalesce(F.col('flag'), F.lit('blank')).alias('top-up flag'))\n       .agg(F.count('*').alias('declarations'),\n            F.round(100 * F.avg(F.col('original_tax').isNull().cast('double')), 1).alias('original tax blank %')))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_011",
+      "id": "paragraph_ctrp_eda_011",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.3 Duplicates",
+      "text": "%md\n## 2.3 Duplicates\n\nThe same thing can appear more than once at four levels: the same row copied, the same item repeated, the same\nentry under more than one declaration ID, and one declaration ID carrying more than one taxpayer or date. The\ntable counts each. If the copies of an item are all identical, keeping one copy loses nothing (rule R5).\n\n**Where the repeated items come from.** The view's definition joins every item to each inspection action recorded on\nits declaration (table `awunadm.insp_act_tab_t`). An item on a declaration with 40 inspection actions appears 40\ntimes. The copies differ only in the inspection columns, which the model does not use, so keeping one copy of each\nitem (R5) loses nothing. The last paragraph of this section checks this against the view.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_012",
+      "id": "paragraph_ctrp_eda_012",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.3 Duplicates",
+      "text": "%pyspark\nn_rows = eda.count()\nn_distinct_rows = eda.distinct().count()\nn_items = eda.select('instance_id', 'key_itm_nbr').distinct().count()\nitem_versions = eda.distinct().groupBy('instance_id', 'key_itm_nbr').count()          # different versions of an item\ncopies = eda.groupBy('instance_id', 'key_itm_nbr').count()                             # copies of an item\nids_per_entry = eda.groupBy('entry_key').agg(F.countDistinct('instance_id').alias('ids'))\nper_id = eda.groupBy('instance_id').agg(F.countDistinct('taxpayer_tin').alias('tins'),\n                                        F.countDistinct('assessment_dt_wid').alias('dates'))\nduplicates = pd.DataFrame([\n    ('Item rows (24 months, IM4 and IM7)', n_rows, ''),\n    ('Rows that are an exact copy of another row', n_rows - n_distinct_rows, 'R5 keeps one copy'),\n    ('Rows that repeat an item (same declaration ID and item number)', n_rows - n_items, 'E02, R5'),\n    ('Items whose copies are NOT all identical', item_versions.where('count > 1').count(),\n     '0 means keeping one copy loses nothing'),\n    ('Most copies of one item', copies.agg(F.max('count')).first()[0], ''),\n    ('Entries under more than one declaration ID', ids_per_entry.where('ids > 1').count(), 'E01, R14'),\n    ('Declaration IDs with more than one TIN', per_id.where('tins > 1').count(), 'expected 0'),\n    ('Declaration IDs with more than one assessment date', per_id.where('dates > 1').count(), 'expected 0'),\n], columns=['check', 'count', 'note'])\nz.show(duplicates)",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_013",
+      "id": "paragraph_ctrp_eda_013",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.3 Copies per item",
+      "text": "%pyspark\n# How many copies items have\ncopy_band = (F.when(F.col('count') == 1, '1 (no copy)').when(F.col('count') == 2, '2')\n              .when(F.col('count') <= 10, '3 to 10').when(F.col('count') <= 100, '11 to 100').otherwise('over 100'))\nz.show(copies.groupBy(copy_band.alias('copies of the item')).agg(F.count('*').alias('items')).orderBy('copies of the item'))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_014",
+      "id": "paragraph_ctrp_eda_014",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.3 Where the copies come from",
+      "text": "%pyspark\n# The view's definition joins each item to every inspection action recorded on its declaration\n# (awunadm.insp_act_tab_t). If that is where the copies come from, an item has as many copies as its declaration\n# has inspection actions (or 1 copy when there are none).\nday = F.col('assessment_dt_wid').cast('string')\nview_rows = (spark.table(VIEW)\n             .where((day > HIST_START) & (day <= SNAP) & F.col('regime_cd').isin('IM4', 'IM7'))\n             .select(F.col('instance_id').cast('string').alias('instance_id'),\n                     F.col('key_itm_nbr').cast('string').alias('key_itm_nbr'),\n                     F.col('taxpayer_tin').cast('string').alias('taxpayer_tin'),\n                     'sad_sid', 'op_date_time', 'inf'))\nif SAMPLE_1_IN:\n    view_rows = view_rows.where(F.pmod(F.hash('taxpayer_tin'), SAMPLE_1_IN) == 0)\n\nhas_action = F.col('sad_sid').isNotNull() | F.col('op_date_time').isNotNull() | F.col('inf').isNotNull()\nactions = (view_rows.where(has_action).groupBy('instance_id')\n                    .agg(F.size(F.collect_set(F.struct('sad_sid', 'op_date_time', 'inf'))).alias('inspection_actions')))\nper_item = (view_rows.groupBy('instance_id', 'key_itm_nbr').agg(F.count('*').alias('copies'))\n                     .join(actions, 'instance_id', 'left')\n                     .fillna(0, subset=['inspection_actions']))\nrepeated = per_item.where('copies > 1')\nexplained = F.col('copies') == F.greatest('inspection_actions', F.lit(1))\nz.show(repeated.select(F.count('*').alias('repeated items'),\n                       F.avg(explained.cast('double')).alias('share whose copies = inspection actions on the declaration')))\nz.show(repeated.orderBy(F.desc('copies')).limit(10))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_015",
+      "id": "paragraph_ctrp_eda_015",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.4 Values",
+      "text": "%pyspark\n# Customs value per item is very skewed, so percentiles say more than the average\nq = [0.01, 0.25, 0.5, 0.75, 0.95, 0.99]\nspread = eda.select(\n    *[F.expr('percentile_approx(customs_value, %s)' % p).alias('value p%d' % round(100 * p)) for p in q],\n    F.avg((F.coalesce('customs_value', F.lit(0)) <= 0).cast('double')).alias('share value 0 or blank'),\n    F.avg((F.coalesce('net_weight', F.lit(0)) <= 0).cast('double')).alias('share weight 0 or blank'),\n    F.avg((F.coalesce('supplementary_qnty', F.lit(0)) > 0).cast('double')).alias('share with units'))\nz.show(spread)",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_016",
+      "id": "paragraph_ctrp_eda_016",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.5 Goods",
+      "text": "%pyspark\n# Share of customs value by HS chapter, origin and APC (APC 000 = no exemption claimed).\n# Choose the bar chart in the result to see it as a picture.\ntotal_value = eda.agg(F.sum('customs_value')).first()[0]\n\ndef top10(column, label):\n    return (eda.groupBy(column.alias(label))\n               .agg((F.sum('customs_value') / total_value).alias('share_of_value'))\n               .orderBy(F.desc('share_of_value')).limit(10))\n\nz.show(top10(F.substring('hsc_cd', 1, 2), 'hs_chapter'))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_017",
+      "id": "paragraph_ctrp_eda_017",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.5 Origins",
+      "text": "%pyspark\nz.show(top10(F.col('gds_org_cty'), 'origin'))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_018",
+      "id": "paragraph_ctrp_eda_018",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.5 APCs",
+      "text": "%pyspark\nz.show(top10(F.col('cpc_cd'), 'apc'))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_019",
+      "id": "paragraph_ctrp_eda_019",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.6 Lanes and top-ups",
+      "text": "%pyspark\n# One row per declaration for these shares (lane, top-up flag and tax repeat on every item)\nper_decl = eda.groupBy('instance_id').agg(F.max('is_red_flg').alias('red'), F.max('is_yellow_flg').alias('yellow'),\n                                          F.max('top_up_flg').alias('flag'), F.max('original_tax_amt').alias('orig'))\nz.show(per_decl.select(\n    F.count('*').alias('declarations'),\n    F.avg((F.col('red') == 1).cast('double')).alias('red lane'),\n    F.avg((F.col('yellow') == 1).cast('double')).alias('yellow lane'),\n    F.avg((F.col('flag') == 'Y').cast('double')).alias('top-up flag Y'),\n    F.avg(F.col('orig').isNull().cast('double')).alias('original tax blank')))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_020",
+      "id": "paragraph_ctrp_eda_020",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.7 The data problems",
+      "text": "%md\n## 2.7 The data problems found\n\n| Issue | What we saw | What the model does |\n|---|---|---|\n| **E01** Same entry under more than one declaration ID | Entry number + station + year identifies an entry. Some entries appear under two or more declaration IDs (instance_id). | R14: the entry key is used and only the latest (highest) declaration ID of each entry is kept. Please confirm which version is the real one. |\n| **E02** The same item row repeated | The same declaration and item number appear many times (up to 522 copies). The view joins every item to each inspection action recorded on its declaration (awunadm.insp_act_tab_t), so an item appears once per action. Apart from the inspection columns, the copies are identical. | R5: each item is kept once. |\n| **E03** TIN blank or not 10 digits | Valid TINs are 10 digits. A few IM4/IM7 declarations carry a short or malformed TIN. | R1: only 10-digit TINs are scored. |\n| **E04** Cancelled declarations | Declarations with status Cancelled. | R3: cancelled declarations are left out. |\n| **E05** APC 483 (destroyed or abandoned goods, dummy reconciliation entries) | The CPC memo describes APC 483 as destroyed or abandoned goods and dummy reconciliation entries, not trade. | R13: declarations under APC 483 are left out. |\n| **E06** Top-up flag Y, but the final tax is not above the original tax | The top-up flag is set, yet the tax did not rise. | R7: a top-up counts only when the flag is Y AND the final tax is above the original tax. |\n| **E07** Tax rose, but no top-up flag | About 3,000 amended declarations have a higher final tax but no top-up flag. | Decision 18: not counted as top-ups (the flag is customs' own marking). Please confirm whether these are top-ups. |\n| **E08** Original tax blank | Original tax is blank on many declarations (about 37% of those without a top-up). | Blank is read as \"unchanged\": the final tax is used. This is our inference, not stated in the data. |\n| **E09** top_up_amt holds the final tax on declarations without a top-up | On declarations without a top-up flag, the top_up_amt column equals the final tax 99.5% of the time. | R7: top_up_amt is not used; top-up = final tax minus original tax. |\n| **E11** Value or weight zero, negative or missing | A few items have no customs value or no weight. | R8: such items are left out of the price features (they still count as declarations). |\n\nFor each problem the next paragraph collects **every item row of the entries affected**, with entry, taxpayer,\ngoods, tax, lane and status columns, so the Risk Officers can say whether it is a real data problem or how the\nsystem works. Two problems touch very many entries (E08, E09), so their tables keep a random 1 in 50 of the\nentries; the summary says so. The tables are named after the problem, for example `ctrp_eda_e01`.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_021",
+      "id": "paragraph_ctrp_eda_021",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.8 Problem checks",
+      "text": "%pyspark\n# Every column the officers need to judge an entry, in the order of the officer workbooks\nDETAIL = ['entry_key', 'entry_num', 'clearance_station_cd', 'dec_ref_yer', 'instance_id', 'key_itm_nbr',\n          'assessment_dt_wid', 'taxpayer_tin', 'taxpayer_nm', 'consignee_tin', 'consignee_nm', 'regime_cd',\n          'extended_proc_cd', 'cpc_cd', 'decl_status', 'hsc_cd', 'gds_org_cty', 'customs_value',\n          'net_weight', 'supplementary_qnty', 'tax_assessed', 'original_tax_amt', 'final_amt', 'top_up_amt',\n          'top_up_flg', 'amendment_flg', 'is_red_flg', 'is_yellow_flg', 'pay_status',\n          'preferential_treatment_flag']\neda_rows = eda.select(*DETAIL)\n\ndef rows_of(selected, key='instance_id'):\n    # Every item row of the declarations (or entries) in `selected`\n    return eda_rows.join(selected.select(key).distinct(), key, 'left_semi').select(*DETAIL)\n\n# One row per declaration, for the tax and lane checks\neda_decl = (eda_rows.groupBy('entry_key', 'instance_id')\n                    .agg(F.max('top_up_flg').alias('flag'),\n                         F.max('original_tax_amt').alias('orig_raw'),\n                         F.max('final_amt').alias('fin'),\n                         F.max('top_up_amt').alias('top_up_amt_max'),\n                         F.max('is_red_flg').alias('red'),\n                         F.max('is_yellow_flg').alias('yellow'))\n                    .withColumn('orig', F.coalesce('orig_raw', 'fin'))\n                    .cache())\nflag, fin, orig_raw = F.col('flag'), F.col('fin'), F.col('orig_raw')\nnot_flagged = F.coalesce(flag, F.lit('N')) != 'Y'\n\ndef e01():\n    ids = (eda_rows.groupBy('entry_key').agg(F.countDistinct('instance_id').alias('declaration_ids_on_entry'))\n                   .where('declaration_ids_on_entry > 1'))\n    return ids.join(eda_rows, 'entry_key').select('declaration_ids_on_entry', *DETAIL)\n\ndef e02():\n    copies = (eda_rows.groupBy('instance_id', 'key_itm_nbr').agg(F.count('*').alias('copies_of_item'))\n                      .where('copies_of_item > 1'))\n    return copies.join(eda_rows, ['instance_id', 'key_itm_nbr']).select('copies_of_item', *DETAIL)\n\ndef e03():\n    return eda_rows.where(~F.coalesce(F.col('taxpayer_tin'), F.lit('')).rlike('^[0-9]{10}$'))\n\ndef e04():\n    return rows_of(eda_rows.where(F.col('decl_status') == 'Cancelled'))\n\ndef e05():\n    return rows_of(eda_rows.where(F.col('cpc_cd') == '483'))\n\ndef e06():\n    return rows_of(eda_decl.where((flag == 'Y') & ~(fin > F.col('orig'))))\n\ndef e07():\n    return rows_of(eda_decl.where(not_flagged & orig_raw.isNotNull() & (fin > orig_raw)))\n\ndef e08():\n    return rows_of(eda_decl.where(orig_raw.isNull()))\n\ndef e09():\n    return rows_of(eda_decl.where(not_flagged & (F.col('top_up_amt_max') == fin) & (fin > 0)))\n\ndef e11():\n    no_value = F.coalesce('customs_value', F.lit(0)) <= 0\n    no_weight = F.coalesce('net_weight', F.lit(0)) <= 0\n    return rows_of(eda_rows.where(no_value | no_weight))\n\n# (code, title, check, keep 1 in K of the entries)\nISSUES = [\n    ('E01', 'Same entry under more than one declaration ID', e01, 1),\n    ('E02', 'The same item row repeated', e02, 1),\n    ('E03', 'TIN blank or not 10 digits', e03, 1),\n    ('E04', 'Cancelled declarations', e04, 1),\n    ('E05', 'APC 483 (destroyed or abandoned goods, dummy reconciliation entries)', e05, 1),\n    ('E06', 'Top-up flag Y, but the final tax is not above the original tax', e06, 1),\n    ('E07', 'Tax rose, but no top-up flag', e07, 1),\n    ('E08', 'Original tax blank', e08, 50),\n    ('E09', 'top_up_amt holds the final tax on declarations without a top-up', e09, 50),\n    ('E11', 'Value or weight zero, negative or missing', e11, 1),\n]\n\ndef sample(df, k):\n    # A random 1 in k of the entries (all rows of each entry kept), when a problem touches too many to read\n    return df if k == 1 else df.where(F.pmod(F.hash('entry_key'), k) == 0)\n\nprint('%d problem checks defined' % len(ISSUES))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_022",
+      "id": "paragraph_ctrp_eda_022",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.9 Run the checks",
+      "text": "%pyspark\nsummary = []\nfor code, title, check, k in ISSUES:\n    found = sample(check(), k).cache()\n    n_found, n_rows = found.select('entry_key').distinct().count(), found.count()\n    save(found, 'ctrp_eda_' + code.lower())\n    summary.append((code, title, n_found, n_rows, k))\n    print('%s  %-70s %10s %s  %10s rows' % (code, title[:70], format(n_found, ','),\n                                           'entries ', format(n_rows, ',')))\n\neda_summary = pd.DataFrame(summary, columns=['issue', 'title', 'entries_or_taxpayers', 'rows', 'sample_1_in'])\nsave(eda_summary, 'ctrp_eda_summary')\nz.show(eda_summary)",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_023",
+      "id": "paragraph_ctrp_eda_023",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.10 Look at one problem",
+      "text": "%pyspark\n# Choose a problem in the list to see its first 200 rows (all rows are in the table named below)\ncode = z.select('Problem', [(c, c + ': ' + t) for c, t, _, _ in ISSUES], 'E01')\nprint('Table: ctrp_eda_' + code.lower())\nz.show(spark.table('ctrp_eda_' + code.lower()).limit(200))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_024",
+      "id": "paragraph_ctrp_eda_024",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "2.11 What the EDA tells us",
+      "text": "%md\n### What the EDA tells us\n\n* Items repeat because the view joins each item to every inspection action on its declaration, so each item must be\n  kept **once** before anything is counted (E02).\n* Some entries sit under more than one declaration ID: one declaration per entry is kept (E01).\n* Cancelled declarations, invalid TINs and APC 483 are not trade and must go (E03, E04, E05).\n* Motor vehicles have their own model, so declarations with vehicles or their parts are left out.\n* Values and weights span many orders of magnitude: comparisons must be **ratios** (price per kg against other\n  importers), not raw amounts (2.2).\n* Tax amounts sit on every item row of a declaration, so taxes are taken **once per declaration**.\n* The top-up flag alone is not enough (E06), and `top_up_amt` holds the final tax on unflagged declarations (E09):\n  a top-up is the flag **and** a rise in tax, measured as final tax minus original tax.\n* Original tax is often blank when nothing changed (E08), so blank means \"same as the final tax\".",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_025",
+      "id": "paragraph_ctrp_eda_025",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "3. Clean",
+      "text": "%md\n## 3. Clean the rows\n\nEach rule is a yes or no question asked of every row. A row is kept only if it passes every rule. The log shows\nhow many rows each rule removed, in order.\n\n| Rule | Keeps | Why |\n|---|---|---|\n| R1 | TINs of 10 digits | a TIN identifies the taxpayer (E03) |\n| R3 | declarations not cancelled | cancelled declarations are not trade (E04) |\n| R4 | regimes IM4 (home use) and IM7 (bond) | the model is about imports |\n| R13 | everything except APC 483 | destroyed or abandoned goods, dummy entries (E05) |\n| R14 | the latest declaration ID of each entry | one entry, one declaration (E01) |\n| R15 | declarations with no motor vehicle item (HS 8701, 8702, 8703, 8704, 8705, 8706, 8707, 8708, 8711) | separate motor vehicle model. The whole declaration goes, because tax and top-ups are recorded per declaration |\n| R5 | each item once | the view repeats items (E02) |",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_026",
+      "id": "paragraph_ctrp_eda_026",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "3.1 Apply the rules",
+      "text": "%pyspark\ndef passes(condition):\n    # A rule as a yes or no column (a blank answer counts as no)\n    return F.coalesce(condition, F.lit(False))\n\ndef removed_by_rule(df, rules):\n    # How many rows each rule removes, counting a row only at the first rule it fails\n    passed_so_far, counts = F.lit(True), []\n    for code, _ in rules:\n        counts.append(F.sum((passed_so_far & ~F.col(code)).cast('int')).alias(code))\n        passed_so_far = passed_so_far & F.col(code)\n    return df.select(counts).first().asDict()\n\n# Step 1: rules about one row at a time\nROW_RULES = [\n    ('R1', 'TIN must be 10 digits', F.col('taxpayer_tin').rlike('^[0-9]{10}$')),\n    ('R3', 'drop cancelled declarations', F.col('decl_status') != 'Cancelled'),\n    ('R4', 'imports only: IM4 (home use) and IM7 (bond)', F.col('regime_cd').isin('IM4', 'IM7')),\n    ('R13', 'drop APC 483', (F.coalesce(F.col('cpc_cd'), F.lit('')) != '483') if EXCLUDE_APC_483 else F.lit(True)),\n]\nstep1 = rows.select('*', *[passes(test).alias(code) for code, _, test in ROW_RULES])\nremoved1 = removed_by_rule(step1, [(c, t) for c, t, _ in ROW_RULES])\nrow_rule_codes = [c for c, _, _ in ROW_RULES]\nkept1 = step1.where(reduce(lambda a, b: a & b, [F.col(c) for c in row_rule_codes])).drop(*row_rule_codes)\n\n# Step 2: rules that look at the other rows of the same entry, declaration or item\npadded_id = F.lpad('instance_id', 20, '0')                      # so '99' does not sort above '100'\nlatest_id_of_entry = F.max(padded_id).over(Window.partitionBy('entry_key'))\nis_vehicle = F.substring('hsc_cd', 1, 4).isin(MOTOR_VEHICLE_HEADINGS)\ndeclaration_has_vehicle = F.max(F.when(is_vehicle, 1).otherwise(0)).over(Window.partitionBy('instance_id'))\ncopy_number = F.row_number().over(Window.partitionBy('instance_id', 'key_itm_nbr').orderBy('assessment_dt_wid'))\nSET_RULES = [\n    ('R14', 'latest declaration ID per entry',\n     (padded_id == latest_id_of_entry) if LATEST_DECLARATION_PER_ENTRY else F.lit(True)),\n    ('R15', 'drop motor vehicle declarations',\n     (declaration_has_vehicle == 0) if EXCLUDE_MOTOR_VEHICLES else F.lit(True)),\n    ('R5', 'keep each item once', copy_number == 1),\n]\nstep2 = kept1.select('*', *[passes(test).alias(code) for code, _, test in SET_RULES]).cache()\nremoved2 = removed_by_rule(step2, [(c, t) for c, t, _ in SET_RULES])\nitems = step2.where(F.col('R14') & F.col('R15') & F.col('R5')).drop('R14', 'R15', 'R5').cache()\nn_items = items.count()\nstep2.unpersist()\n\n# The cleaning log\nlog, left = [], n_loaded\nfor code, text, _ in ROW_RULES + SET_RULES:\n    gone = {**removed1, **removed2}[code]\n    log.append((code, text, left, gone, left - gone))\n    left -= gone\nassert left == n_items, 'the log does not add up'\ncleaning_log = pd.DataFrame(log, columns=['rule', 'what it does', 'rows before', 'rows removed', 'rows left'])\nsave(cleaning_log, 'ctrp_cleaning_log')\nz.show(cleaning_log)",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_027",
+      "id": "paragraph_ctrp_eda_027",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "3.2 After cleaning",
+      "text": "%pyspark\nprint('Clean item rows: {:,}   declarations: {:,}   taxpayers: {:,}'.format(\n    n_items, items.select('instance_id').distinct().count(), items.select('taxpayer_tin').distinct().count()))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_028",
+      "id": "paragraph_ctrp_eda_028",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "4. Declarations",
+      "text": "%md\n## 4. From item rows to declarations\n\nMany features count **declarations** (for example \"share of declarations amended\"). Tax, top-up, lane and status\nare the same on every item of a declaration, so the items are grouped into one row per declaration:\n\n* **Value** = the sum of the items' customs values. **Items** = how many items.\n* **Original tax**: blank means unchanged, so it is filled with the final tax (E08).\n* **Topped up** = the top-up flag is `Y` **and** the final tax is above the original tax (E06).\n  **Top-up amount** = final tax minus original tax (E09: `top_up_amt` is not used).\n* **Tax reduced** = the final tax is below the original tax.\n* **Severe top-up** = a top-up of 30% or more of the final tax.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_029",
+      "id": "paragraph_ctrp_eda_029",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "4.1 Declarations",
+      "text": "%pyspark\ndecl = (items.groupBy('instance_id')\n             .agg(F.max('taxpayer_tin').alias('taxpayer_tin'),\n                  F.max('taxpayer_nm').alias('taxpayer_nm'),\n                  F.max('adate').alias('adate'),\n                  F.max('assessment_dt_wid').alias('dt'),\n                  F.max('regime_cd').alias('regime'),\n                  F.coalesce(F.max('original_tax_amt'), F.max('final_amt')).alias('orig_tax'),   # blank = unchanged\n                  F.max('final_amt').alias('final_tax'),\n                  F.max('top_up_flg').alias('top_up_flg'),\n                  F.max('amendment_flg').alias('amended'),\n                  F.max('clearance_station_cd').alias('station'),\n                  F.max('is_red_flg').alias('red'),\n                  F.max('is_yellow_flg').alias('yellow'),\n                  F.max('pay_status').alias('pay_status'),\n                  F.sum('customs_value').alias('value'),\n                  F.count('*').alias('n_items')))\n\ntopped_up = (F.col('top_up_flg') == 'Y') & (F.col('final_tax') > F.col('orig_tax'))\ndecl = (decl.withColumn('topped_up', F.when(topped_up, 1).otherwise(0))\n            .withColumn('top_up', F.when(topped_up, F.col('final_tax') - F.col('orig_tax')).otherwise(0.0))\n            .withColumn('negative_top_up', F.when(F.col('final_tax') < F.col('orig_tax'), 1).otherwise(0))\n            .withColumn('severe', F.when((F.col('topped_up') == 1)\n                                         & (F.col('top_up') >= 0.30 * F.col('final_tax')), 1).otherwise(0))\n            .cache())\n\n# The 24-month history window used by the features (never anything after the snapshot)\nin_history = (F.col('dt') > HIST_START) & (F.col('dt') <= SNAP)\nhist = decl.where(in_history).cache()\nhist_items = items.where((F.col('assessment_dt_wid') > HIST_START) & (F.col('assessment_dt_wid') <= SNAP)).cache()\nprint('Declarations in the 24 months: {:,}'.format(hist.count()))\npeek(hist.select('instance_id', 'taxpayer_tin', 'dt', 'regime', 'n_items', 'value', 'orig_tax', 'final_tax',\n                 'top_up_flg', 'topped_up', 'top_up', 'severe', 'negative_top_up', 'amended', 'red', 'yellow',\n                 'station'))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_030",
+      "id": "paragraph_ctrp_eda_030",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "4.2 One row per taxpayer",
+      "text": "%md\n### 4.2 One row per taxpayer: the starting table\n\nEvery taxpayer with at least one clean declaration in the 24 months gets a row. Each feature below is built as a\nsmall table (one row per taxpayer) and kept in `parts`; Part 8 puts them side by side.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_031",
+      "id": "paragraph_ctrp_eda_031",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "4.2 Starting table",
+      "text": "%pyspark\nbase = (hist.groupBy('taxpayer_tin')\n            .agg(F.max(F.struct('dt', 'taxpayer_nm')).getField('taxpayer_nm').alias('taxpayer_nm'),  # latest name\n                 F.count('*').alias('decl_24m_count'),                     # declarations in 24 months\n                 F.sum('value').alias('customs_value_24m_ugx'),\n                 F.sum('orig_tax').alias('original_tax_24m_ugx'),\n                 F.sum('top_up').alias('top_up_24m_ugx'))\n            .cache())\nparts = {}\nprint('Taxpayers: {:,}'.format(base.count()))\npeek(base)",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_032",
+      "id": "paragraph_ctrp_eda_032",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5. Track A",
+      "text": "%md\n## 5. Track A: the compliance history (8 features)\n\nThese are the scored parameters agreed with the Risk Officers. Each is a **rate**, so a large and a small importer\ncan be compared fairly. Here they are first built over 24 months; Part 7 then gives recent years more weight (the\n`3y` versions) and protects small traders, as production does.\n\n| Feature the scorecard reads | Parameter | Points (likelihood x impact) |\n|---|---|---|\n| `topped_up_per_decl_3y_rate` | PAR_045T Declarations topped up | L5 x I5, scale 0.03 to 0.4 |\n| `severe_top_up_per_decl_3y_rate` | PAR_077 Severe top-ups | L4 x I5, scale 0.02 to 0.2 |\n| `amended_per_decl_3y_rate` | PAR_045 Declarations amended | L4 x I4, scale 0.1 to 0.5 |\n| `top_up_per_final_tax_3y_rate` | PAR_048 Top-ups as a share of final tax | L3 x I1, scale 0.05 to 0.25 |\n| `peer_price_shortfall_per_value_24m_rate` | PAR_076 Value below benchmark | L3 x I1, scale 0.02 to 0.2 |\n| `tax_reduced_per_decl_3y_rate` | PAR_066 Tax reduced after assessment | L3 x I1, scale 0.02 to 0.2 |\n| `top_up_last_180d_flag` | PAR_105 Recent top-ups | L3 x I1, scale 0 to 1 |\n| `away_from_main_station_per_decl_24m_rate` | PAR_023 Clearance away from main station | L3 x I1, scale 0.3 to 0.7 |",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_033",
+      "id": "paragraph_ctrp_eda_033",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.1",
+      "text": "%md\n### 5.1 `topped_up_per_decl_24m_rate`: declarations topped up (PAR_045T, the officers' rule)\n\n**Inputs:** `topped_up` (0 or 1 per declaration, Part 4). **Logic:** topped-up declarations \u00f7 declarations.\n**Why:** a taxpayer often found under-declaring is likely to be found again.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_034",
+      "id": "paragraph_ctrp_eda_034",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.1 topped_up_per_decl_24m_rate",
+      "text": "%pyspark\nparts['topped_up_per_decl_24m_rate'] = hist.groupBy('taxpayer_tin').agg(F.avg('topped_up').alias('topped_up_per_decl_24m_rate'))\npeek(base.join(parts['topped_up_per_decl_24m_rate'], 'taxpayer_tin').select('taxpayer_tin', 'decl_24m_count', 'topped_up_per_decl_24m_rate'))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_035",
+      "id": "paragraph_ctrp_eda_035",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.2",
+      "text": "%md\n### 5.2 `severe_top_up_per_decl_24m_rate`: severe top-ups (PAR_077)\n\n**Inputs:** `severe` (0 or 1: a top-up of 30% or more of the final tax). **Logic:** severe top-ups \u00f7 declarations.\n**Why:** a large correction says more about intent than a small one.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_036",
+      "id": "paragraph_ctrp_eda_036",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.2 severe_top_up_per_decl_24m_rate",
+      "text": "%pyspark\nparts['severe_top_up_per_decl_24m_rate'] = (hist.groupBy('taxpayer_tin')\n                                         .agg(F.avg('severe').alias('severe_top_up_per_decl_24m_rate')))\npeek(parts['severe_top_up_per_decl_24m_rate'])",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_037",
+      "id": "paragraph_ctrp_eda_037",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.3",
+      "text": "%md\n### 5.3 `amended_per_decl_24m_rate`: declarations amended (PAR_045, also in Track B)\n\n**Inputs:** `amendment_flg` (`Y` or `N`). **Logic:** amended declarations \u00f7 declarations.\n**Why:** declarations that are often wrong the first time.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_038",
+      "id": "paragraph_ctrp_eda_038",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.3 amended_per_decl_24m_rate",
+      "text": "%pyspark\nis_amended = F.when(F.col('amended') == 'Y', 1.0).otherwise(0.0)\nparts['amended_per_decl_24m_rate'] = (hist.groupBy('taxpayer_tin')\n                                         .agg(F.avg(is_amended).alias('amended_per_decl_24m_rate')))\npeek(parts['amended_per_decl_24m_rate'])",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_039",
+      "id": "paragraph_ctrp_eda_039",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.4",
+      "text": "%md\n### 5.4 `top_up_per_final_tax_24m_rate`: top-ups as a share of the final tax (PAR_048)\n\n**Inputs:** `top_up_24m_ugx`, `original_tax_24m_ugx` (UGX, Part 4.2). **Logic:** top-ups \u00f7 (original tax + top-ups),\nmeasured over the final tax so it stays between 0 and 1. **Why:** how much of what the taxpayer finally paid had\nto be found by customs.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_040",
+      "id": "paragraph_ctrp_eda_040",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.4 top_up_per_final_tax_24m_rate",
+      "text": "%pyspark\nfinal_tax = F.col('original_tax_24m_ugx') + F.col('top_up_24m_ugx')\nparts['top_up_per_final_tax_24m_rate'] = base.select(\n    'taxpayer_tin', F.when(final_tax > 0, F.col('top_up_24m_ugx') / final_tax).alias('top_up_per_final_tax_24m_rate'))\npeek(parts['top_up_per_final_tax_24m_rate'])",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_041",
+      "id": "paragraph_ctrp_eda_041",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.5",
+      "text": "%md\n### 5.5 `tax_reduced_per_decl_24m_rate`: tax reduced after assessment (PAR_066)\n\n**Inputs:** `negative_top_up` (0 or 1). **Logic:** declarations whose final tax fell below the original \u00f7\ndeclarations. **Why:** frequent reductions can point to errors or to pressure on assessments.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_042",
+      "id": "paragraph_ctrp_eda_042",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.5 tax_reduced_per_decl_24m_rate",
+      "text": "%pyspark\nparts['tax_reduced_per_decl_24m_rate'] = (hist.groupBy('taxpayer_tin')\n                                           .agg(F.avg('negative_top_up').alias('tax_reduced_per_decl_24m_rate')))\npeek(parts['tax_reduced_per_decl_24m_rate'])",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_043",
+      "id": "paragraph_ctrp_eda_043",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.6",
+      "text": "%md\n### 5.6 `top_up_last_180d_flag`: a top-up in the last 180 days (PAR_105)\n\n**Inputs:** `adate` of topped-up declarations. **Logic:** days from the last top-up to the snapshot. The feature is\n1 if that is 180 days or fewer, else 0 (also 0 when there was no top-up). **Why:** recent non-compliance matters\nmore than old.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_044",
+      "id": "paragraph_ctrp_eda_044",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.6 top_up_last_180d_flag",
+      "text": "%pyspark\nlast_top_up = F.max(F.when(F.col('topped_up') == 1, F.col('adate')))\ndays = hist.groupBy('taxpayer_tin').agg(F.datediff(snap_date, last_top_up).alias('days_since_last_top_up'))\nparts['top_up_last_180d_flag'] = days.withColumn(\n    'top_up_last_180d_flag', F.when(F.col('days_since_last_top_up') <= 180, 1.0).otherwise(0.0))\npeek(parts['top_up_last_180d_flag'])",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_045",
+      "id": "paragraph_ctrp_eda_045",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.7",
+      "text": "%md\n### 5.7 `away_from_main_station_per_decl_24m_rate`: clearing away from the main station (PAR_023, also in Track B)\n\n**Inputs:** `clearance_station_cd` per declaration. **Logic:** count declarations per station. The main station is\nthe busiest. The feature is 1 \u2212 the main station's share. **Why:** moving between stations can be a search for\neasier checks.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_046",
+      "id": "paragraph_ctrp_eda_046",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.7 away_from_main_station_per_decl_24m_rate",
+      "text": "%pyspark\nper_station = hist.groupBy('taxpayer_tin', 'station').count()          # a blank station counts as one station\nparts['away_from_main_station_per_decl_24m_rate'] = (per_station.groupBy('taxpayer_tin')\n                                             .agg((F.max('count') / F.sum('count')).alias('main_station_per_decl_24m_rate'))\n                                             .withColumn('away_from_main_station_per_decl_24m_rate', 1.0 - F.col('main_station_per_decl_24m_rate')))\npeek(parts['away_from_main_station_per_decl_24m_rate'])",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_047",
+      "id": "paragraph_ctrp_eda_047",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.8",
+      "text": "%md\n### 5.8 `peer_price_shortfall_per_value_24m_rate`: value below other importers' price (PAR_076, also in Track B)\n\nThis one needs a **benchmark**: the middle (median) price that importers declare for the same goods.\n\n**Inputs:** `customs_value`, `net_weight`, `supplementary_qnty`, `hsc_cd`, `gds_org_cty` (item rows).\n\n**Logic, step by step:**\n1. Price per kg = value \u00f7 weight. Price per unit = value \u00f7 units (where units are given).\n2. Benchmark per HS code: the median price per kg and per unit of all items, if at least 5 different importers\n   bring that code. Where 5 or more bring it **from the same origin**, that origin's median is used instead\n   (goods of one code differ in price by origin).\n3. Each item is then marked:\n   * **keying error** if its price per kg is under 1% of the benchmark (most likely a weight in the wrong unit, so it is kept out);\n   * **low price** if it is under half the benchmark per kg (and per unit where units exist);\n   * **shortfall** = how much more it would be worth at the benchmark price (the smaller of the per-kg and per-unit\n     figures).\n4. Per taxpayer: shortfall on low-priced items \u00f7 the taxpayer's benchmarked value.\n\n**Why:** undervaluation is the main revenue risk at import. The same item table gives four Track B features (6.3).",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_048",
+      "id": "paragraph_ctrp_eda_048",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.8 peer_price_shortfall_per_value_24m_rate",
+      "text": "%pyspark\npriced = (hist_items.where((F.col('customs_value') > 0) & (F.col('net_weight') > 0))\n                    .withColumn('price_kg', F.col('customs_value') / F.col('net_weight'))\n                    .withColumn('price_unit', F.when(F.col('supplementary_qnty') > 0,\n                                                     F.col('customs_value') / F.col('supplementary_qnty'))))\n\ndef benchmark(keys, suffix=''):\n    # The median price per kg and per unit, where at least 5 importers bring the goods\n    return (priced.groupBy(*keys)\n                  .agg(median('price_kg').alias('med_kg' + suffix), median('price_unit').alias('med_unit' + suffix),\n                       F.countDistinct('taxpayer_tin').alias('importers'))\n                  .where('importers >= 5').drop('importers'))\n\non_origin = F.col('med_kg_o').isNotNull()\nit = (priced.join(benchmark(['hsc_cd']), 'hsc_cd')                                   # an HS benchmark is needed\n            .join(benchmark(['hsc_cd', 'gds_org_cty'], '_o'), ['hsc_cd', 'gds_org_cty'], 'left')\n            .withColumn('bm_kg', F.when(on_origin, F.col('med_kg_o')).otherwise(F.col('med_kg')))\n            .withColumn('bm_unit', F.when(on_origin, F.col('med_unit_o')).otherwise(F.col('med_unit')))\n            .withColumn('on_origin_bench', on_origin.cast('int')))\n\nprice_kg, bm_kg, bm_unit, units = F.col('price_kg'), F.col('bm_kg'), F.col('bm_unit'), F.col('supplementary_qnty')\nlow_per_unit_too = bm_unit.isNull() | units.isNull() | (units <= 0) | (F.col('customs_value') / units < 0.5 * bm_unit)\ngap_per_kg = bm_kg * F.col('net_weight') - F.col('customs_value')\ngap_per_unit = F.when((units > 0) & bm_unit.isNotNull(), bm_unit * units - F.col('customs_value'))\nit = (it.withColumn('implausible', F.when(price_kg < 0.01 * bm_kg, 1).otherwise(0))\n        .withColumn('low_price', F.when((price_kg < 0.5 * bm_kg) & (price_kg >= 0.01 * bm_kg) & low_per_unit_too, 1)\n                                  .otherwise(0))\n        .withColumn('shortfall', F.least(gap_per_kg, gap_per_unit))                  # the smaller one\n        .withColumn('price_deviation', F.abs(F.log(price_kg / bm_kg)))\n        .cache())\n\ncounted_shortfall = F.when((F.col('low_price') == 1) & (F.col('shortfall') > 0), F.col('shortfall')).otherwise(0)\nparts['peer_price_shortfall_per_value_24m_rate'] = it.groupBy('taxpayer_tin').agg(\n    F.count('*').alias('priced_items_24m_count'),\n    (F.sum(counted_shortfall) / F.sum('customs_value')).alias('peer_price_shortfall_per_value_24m_rate'))\npeek(it.select('taxpayer_tin', 'hsc_cd', 'gds_org_cty', 'customs_value', 'net_weight', 'price_kg', 'bm_kg',\n               'implausible', 'low_price', 'shortfall'))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_049",
+      "id": "paragraph_ctrp_eda_049",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "5.8 taxpayers with a shortfall",
+      "text": "%pyspark\npeek(parts['peer_price_shortfall_per_value_24m_rate'].where('peer_price_shortfall_per_value_24m_rate > 0'))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_050",
+      "id": "paragraph_ctrp_eda_050",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6. Track B",
+      "text": "%md\n## 6. Track B: how the taxpayer trades (17 features)\n\nTrack B looks for risk the current checks have not yet caught, so it uses **no** input that records what customs\ndid (no top-ups, no lanes). Three of its features were built above: `amended_per_decl_24m_rate` (5.3),\n`peer_price_shortfall_per_value_24m_rate` (5.8) and `away_from_main_station_per_decl_24m_rate` (5.7).",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_051",
+      "id": "paragraph_ctrp_eda_051",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.1",
+      "text": "%md\n### 6.1 `unpaid_tax_per_decl_24m_rate`: tax left unpaid (stand-in for PAR_072)\n\n**Inputs:** `pay_status`, `final_amt`. **Logic:** declarations with tax due and status `NOT_PAID` \u00f7 declarations.\n**Why:** unpaid tax is non-compliance in itself.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_052",
+      "id": "paragraph_ctrp_eda_052",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.1 unpaid_tax_per_decl_24m_rate",
+      "text": "%pyspark\nunpaid = F.when((F.col('pay_status') == 'NOT_PAID') & (F.col('final_tax') > 0), 1.0).otherwise(0.0)\nparts['unpaid_tax_per_decl_24m_rate'] = hist.groupBy('taxpayer_tin').agg(F.avg(unpaid).alias('unpaid_tax_per_decl_24m_rate'))\npeek(parts['unpaid_tax_per_decl_24m_rate'])",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_053",
+      "id": "paragraph_ctrp_eda_053",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.2",
+      "text": "%md\n### 6.2 `pref_claimed_per_item_24m_rate`: preferential treatment claimed (PAR_050)\n\n**Inputs:** `preferential_treatment_flag` (item rows). **Logic:** items claiming preference \u00f7 items.\n**Why:** a false origin claim (EAC, COMESA) avoids duty.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_054",
+      "id": "paragraph_ctrp_eda_054",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.2 pref_claimed_per_item_24m_rate",
+      "text": "%pyspark\nclaims = F.when(F.col('preferential_treatment_flag') == 'Y', 1.0).otherwise(0.0)\nparts['pref_claimed_per_item_24m_rate'] = (hist_items.groupBy('taxpayer_tin')\n                                                 .agg(F.avg(claims).alias('pref_claimed_per_item_24m_rate')))\npeek(parts['pref_claimed_per_item_24m_rate'])",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_055",
+      "id": "paragraph_ctrp_eda_055",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.3",
+      "text": "%md\n### 6.3 The other price features (from the item table in 5.8)\n\n| Feature | Logic | Why |\n|---|---|---|\n| `price_keying_error_per_item_24m_rate` | items under 1% of the benchmark \u00f7 items | repeated \"keying errors\" can hide value |\n| `price_under_half_peer_per_item_24m_rate` | items under half the benchmark \u00f7 items | how often prices are low (5.8 gives how much) |\n| `median_price_dev_from_peer_24m_log` | the taxpayer's median distance from the benchmark, either way, on a log scale (keying errors left out) | prices far from other importers, up or down (stand-in for PAR_090) |\n| `priced_on_coo_peer_per_item_24m_rate` | share of items priced against their own origin's benchmark | context only, not scored |",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_056",
+      "id": "paragraph_ctrp_eda_056",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.3 price features",
+      "text": "%pyspark\nparts['price_features'] = it.groupBy('taxpayer_tin').agg(\n    F.avg('implausible').alias('price_keying_error_per_item_24m_rate'),\n    F.avg('low_price').alias('price_under_half_peer_per_item_24m_rate'),\n    median('CASE WHEN implausible = 0 THEN price_deviation END').alias('median_price_dev_from_peer_24m_log'),\n    F.avg('on_origin_bench').alias('priced_on_coo_peer_per_item_24m_rate'))\npeek(parts['price_features'])",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_057",
+      "id": "paragraph_ctrp_eda_057",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.4",
+      "text": "%md\n### 6.4 `own_price_drop_per_recent_value_6m_rate`: price dropped against the taxpayer's own history (stand-in for PAR_067)\n\n**Inputs:** `customs_value`, `net_weight`, `supplementary_qnty`, `hsc_cd`, `adate`.\n\n**Logic:** for each tariff code the taxpayer imported both in the **last 6 months** and in the **18 months before**\n(at least 2 earlier items and 1 recent), compare its own median price recently with before. A code counts as a drop\nwhen the recent price is under 70% of the earlier one (per kg, and per unit where given). The feature is the share\nof recent value on such codes. **Why:** a trader who suddenly declares the same goods cheaper may have started\nundervaluing.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_058",
+      "id": "paragraph_ctrp_eda_058",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.4 own_price_drop_per_recent_value_6m_rate",
+      "text": "%pyspark\nsix_months_back = F.add_months(snap_date, -6)\nlate, early = F.col('adate') > six_months_back, F.col('adate') <= six_months_back\nown = (priced.withColumn('early_kg', F.when(early, F.col('price_kg')))\n             .withColumn('late_kg', F.when(late, F.col('price_kg')))\n             .withColumn('early_u', F.when(early, F.col('price_unit')))\n             .withColumn('late_u', F.when(late, F.col('price_unit')))\n             .groupBy('taxpayer_tin', 'hsc_cd')\n             .agg(median('early_kg').alias('early_kg'), median('late_kg').alias('late_kg'),\n                  median('early_u').alias('early_u'), median('late_u').alias('late_u'),\n                  F.sum(F.when(late, F.col('customs_value')).otherwise(0)).alias('late_value'),\n                  F.sum(early.cast('int')).alias('n_early'), F.sum(late.cast('int')).alias('n_late')))\nown = own.where((F.col('n_early') >= 2) & (F.col('n_late') >= 1) & (F.col('early_kg') > 0))\n\ndropped = ((F.col('late_kg') < 0.7 * F.col('early_kg'))\n           & (F.col('early_u').isNull() | F.col('late_u').isNull() | (F.col('late_u') < 0.7 * F.col('early_u'))))\nparts['own_price_drop_per_recent_value_6m_rate'] = own.groupBy('taxpayer_tin').agg(\n    F.count('*').alias('hs_codes_compared_count'),\n    (F.sum(F.when(dropped, F.col('late_value')).otherwise(0)) / F.sum('late_value')).alias('own_price_drop_per_recent_value_6m_rate'))\npeek(own)",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_059",
+      "id": "paragraph_ctrp_eda_059",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.5",
+      "text": "%md\n### 6.5 `duty_under_half_peer_per_value_24m_rate` and `duty_gap_vs_peer_per_value_24m_rate`: duty below other importers (stand-ins for PAR_096, PAR_016)\n\n**Inputs:** `tax_assessed`, `customs_value`, `hsc_cd`, `cpc_cd`.\n\n**Logic:** for each tariff code, the median tax rate (tax \u00f7 value) that importers pay **with no exemption claimed**\n(APC `000`), if at least 5 importers. Then, among the taxpayer's own APC `000` items:\n* `duty_under_half_peer_per_value_24m_rate` = value taxed at under half that rate \u00f7 value;\n* `duty_gap_vs_peer_per_value_24m_rate` = the missing tax (median rate \u00d7 value \u2212 tax paid) \u00f7 value.\n\nItems under an exemption APC are left out on purpose: a lower rate is expected there. **Why:** paying much less than\nothers for the same goods points to a wrong tariff code or rate.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_060",
+      "id": "paragraph_ctrp_eda_060",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.5 duty features",
+      "text": "%pyspark\ntaxed = (hist_items.where((F.col('customs_value') > 0) & (F.col('tax_assessed') >= 0))\n                   .withColumn('rate', F.col('tax_assessed') / F.col('customs_value')))\nduty_bench = (taxed.where(F.col('cpc_cd') == '000').groupBy('hsc_cd')\n                   .agg(median('rate').alias('med_rate'), F.countDistinct('taxpayer_tin').alias('importers'))\n                   .where('importers >= 5').drop('importers'))\ntaxed = taxed.join(duty_bench, 'hsc_cd', 'left')\n\ncompared = (F.col('cpc_cd') == '000') & (F.col('med_rate') > 0)          # no exemption, and a benchmark exists\nvalue_compared = F.sum(F.when(compared, F.col('customs_value')).otherwise(0))\nlow_rate = compared & (F.col('rate') < 0.5 * F.col('med_rate'))\nmissing_tax = F.greatest(F.col('med_rate') * F.col('customs_value') - F.col('tax_assessed'), F.lit(0))\nparts['duty_features'] = taxed.groupBy('taxpayer_tin').agg(\n    (F.sum(F.when(low_rate, F.col('customs_value')).otherwise(0)) / value_compared).alias('duty_under_half_peer_per_value_24m_rate'),\n    (F.sum(F.when(compared, missing_tax).otherwise(0)) / value_compared).alias('duty_gap_vs_peer_per_value_24m_rate'))\npeek(parts['duty_features'])",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_061",
+      "id": "paragraph_ctrp_eda_061",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.6",
+      "text": "%md\n### 6.6 `exempt_apc_per_value_24m_rate` and `watchlist_apc_per_value_24m_rate` (PAR_052, PAR_053)\n\n**Inputs:** `cpc_cd`, `customs_value`. **Logic:** value under any APC other than `000` \u00f7 value; and value under the\n11 APCs the AC-Trade memo marks \"look out for possible abuse\" \u00f7 value. **Why:** exemptions are a known route for\nrevenue loss.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_062",
+      "id": "paragraph_ctrp_eda_062",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.6 APC features",
+      "text": "%pyspark\nWATCHLIST = ['404', '409', '417', '451', '455', '457', '476', '479', '481', '482', '484']\nvalued = hist_items.where(F.col('customs_value') > 0)\nvalue_under = lambda test: F.sum(F.when(test, F.col('customs_value')).otherwise(0)) / F.sum('customs_value')\nparts['apc_features'] = valued.groupBy('taxpayer_tin').agg(\n    value_under(F.col('cpc_cd') != '000').alias('exempt_apc_per_value_24m_rate'),\n    value_under(F.col('cpc_cd').isin(WATCHLIST)).alias('watchlist_apc_per_value_24m_rate'))\npeek(parts['apc_features'])",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_063",
+      "id": "paragraph_ctrp_eda_063",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.7",
+      "text": "%md\n### 6.7 `same_day_split_per_decl_vs_norm_24m_diff`: same-day splitting above the norm (raised by the officers)\n\n**Inputs:** `hsc_cd`, `assessment_dt_wid`, `instance_id`, `extended_proc_cd`.\n\n**Logic:**\n1. Count each taxpayer's declarations per tariff code per day (`n`). Cement and salt (chapter 25), fuel (chapter 27)\n   and fuel transit (EPC 4080, 7180) are left out: they arrive as many trucks a day for good reason.\n2. The **norm** for each tariff code: across all importers, the share of declarations that came as same-day repeats\n   (`n` of 2 or more).\n3. The taxpayer's own share in same-day repeats, minus the norm for its own mix of goods.\n\n**Why:** splitting one consignment can keep each declaration under a value or check threshold.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_064",
+      "id": "paragraph_ctrp_eda_064",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.7 same_day_split_per_decl_vs_norm_24m_diff",
+      "text": "%pyspark\nsplittable = hist_items.where(~F.substring('hsc_cd', 1, 2).isin('25', '27')\n                              & ~F.coalesce(F.col('extended_proc_cd'), F.lit('')).isin('4080', '7180'))\nper_day = (splittable.groupBy('taxpayer_tin', 'assessment_dt_wid', 'hsc_cd')\n                     .agg(F.countDistinct('instance_id').alias('n'))\n                     .withColumn('n_repeat', F.when(F.col('n') >= 2, F.col('n')).otherwise(0)))\nnorm = per_day.groupBy('hsc_cd').agg((F.sum('n_repeat') / F.sum('n')).alias('norm_share'))\nparts['same_day_split_per_decl_vs_norm_24m_diff'] = (per_day.join(norm, 'hsc_cd').groupBy('taxpayer_tin')\n    .agg((F.sum('n_repeat') / F.sum('n')).alias('same_day_split_per_decl_24m_rate'),\n         (F.sum(F.col('n') * F.col('norm_share')) / F.sum('n')).alias('same_day_norm_per_decl_24m_rate'))\n    .withColumn('same_day_split_per_decl_vs_norm_24m_diff', F.col('same_day_split_per_decl_24m_rate') - F.col('same_day_norm_per_decl_24m_rate')))\npeek(per_day.orderBy(F.desc('n')))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_065",
+      "id": "paragraph_ctrp_eda_065",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.8",
+      "text": "%md\n### 6.8 `decl_90d_per_avg_qtr_24m_log`: sudden rise in declarations\n\n**Inputs:** `adate` per declaration. **Logic:** declarations in the last 90 days against the average quarter over\nthe 24 months (24 months \u00f7 8 quarters), on a log scale: `log((last 90 days + 1) / (average quarter + 1))`.\n0 = a normal quarter, +1.1 = about 3 times normal. **Why:** a sharp jump can mean a borrowed TIN or a burst before\ndisappearing.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_066",
+      "id": "paragraph_ctrp_eda_066",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.8 decl_90d_per_avg_qtr_24m_log",
+      "text": "%pyspark\nrecent = F.when(F.col('adate') > F.date_sub(snap_date, 90), 1).otherwise(0)\nparts['decl_90d_per_avg_qtr_24m_log'] = (hist.groupBy('taxpayer_tin')\n                      .agg(F.count('*').alias('_n'), F.sum(recent).alias('decl_90d_count'))\n                      .withColumn('decl_90d_per_avg_qtr_24m_log', F.log((F.col('decl_90d_count') + 1) / (F.col('_n') / 8.0 + 1)))\n                      .drop('_n'))\npeek(parts['decl_90d_per_avg_qtr_24m_log'].orderBy(F.desc('decl_90d_per_avg_qtr_24m_log')))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_067",
+      "id": "paragraph_ctrp_eda_067",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.9",
+      "text": "%md\n### 6.9 `hs4_per_decl_24m_ratio`: many kinds of goods per declaration\n\n* `hs4_per_decl_24m_ratio` = different 4-digit HS headings \u00f7 declarations. **Why:** mixing many goods makes checks harder and\n  can hide misdescribed items.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_068",
+      "id": "paragraph_ctrp_eda_068",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.9 hs4_per_decl_24m_ratio",
+      "text": "%pyspark\nheading = F.substring('hsc_cd', 1, 4)\nheadings = hist_items.groupBy('taxpayer_tin').agg(F.countDistinct(heading).alias('hs4_24m_count'))\nper_declaration = F.col('hs4_24m_count') / F.greatest('decl_24m_count', F.lit(1))\nparts['hs4_per_decl_24m_ratio'] = (base.select('taxpayer_tin', 'decl_24m_count').join(headings, 'taxpayer_tin', 'left')\n                             .withColumn('hs4_per_decl_24m_ratio', per_declaration)\n                             .drop('decl_24m_count'))\npeek(parts['hs4_per_decl_24m_ratio'])",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_069",
+      "id": "paragraph_ctrp_eda_069",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.10",
+      "text": "%md\n### 6.10 `new_importer_24m_score`: recently started importing (PAR_019, PAR_101)\n\n**Inputs:** `adate`, and the taxpayers who declared IM4 or IM7 in the 3 years **before** the 24-month window.\n**Logic:** `new_trader` = not among them. `new_importer_24m_score` = \u2212log(1 + days since the first declaration in the window), plus 1\nfor a new trader, so newer gives a higher value. **Why:** new traders have no track record, and new TINs are used for\none-off fraud.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_070",
+      "id": "paragraph_ctrp_eda_070",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "6.10 new_importer_24m_score",
+      "text": "%pyspark\nday = F.col('assessment_dt_wid').cast('string')\nearlier_importers = (spark.table(VIEW)\n    .where((day > PRIOR_START) & (day <= HIST_START)\n           & F.col('regime_cd').isin('IM4', 'IM7') & (F.col('decl_status') != 'Cancelled')\n           & F.col('taxpayer_tin').cast('string').rlike('^[0-9]{10}$'))\n    .select(F.col('taxpayer_tin').cast('string').alias('taxpayer_tin')).distinct()\n    .withColumn('imported_before', F.lit(1)))\n\ndays_since_first = F.datediff(snap_date, F.min('adate'))\nfirst_seen = hist.groupBy('taxpayer_tin').agg(days_since_first.alias('days_since_first_decl_24m'))\nparts['new_importer_24m_score'] = (first_seen.join(earlier_importers, 'taxpayer_tin', 'left')\n    .withColumn('new_trader', F.when(F.col('imported_before').isNull(), 'Y').otherwise('N'))\n    .withColumn('new_importer_24m_score', -F.log1p(F.greatest('days_since_first_decl_24m', F.lit(0)))\n                           + F.when(F.col('new_trader') == 'Y', 1.0).otherwise(0.0))\n    .drop('imported_before'))\npeek(parts['new_importer_24m_score'])",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_071",
+      "id": "paragraph_ctrp_eda_071",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "7. After the features",
+      "text": "%md\n## 7. Steps after the features\n\nThree steps turn the features into what the scorecard and the model read. They are the same as in production.\n\n1. **Recency (Track A).** Recent years count more: over the last **3 years**, each declaration counts 1 in the latest\n   year, 0.5 in the year before and 0.25 in the one before that. Tested on 18 dates since 2017: better than two equal\n   years on all 18. Applies to the top-up, severe top-up, amendment and tax-reduction rates and the top-up share.\n2. **Small numbers (both tracks).** A rate built on 2 declarations is mostly luck. Each rate is pulled towards the\n   average of everyone by weight `n / (n + 10)`, where `n` is the taxpayer's declarations (items for the price\n   features). It is only ever pulled **down**, so a clean small trader is never given other people's behaviour.\n   Example: 1 amended declaration out of 2 (50%), average 15%: weight 2/12 = 0.17, so 0.17 \u00d7 50% + 0.83 \u00d7 15% \u2248 21%.\n3. **Peer groups (Track B).** Each Track B feature becomes a **percentile within the peer group**: the HS section of\n   the taxpayer's main goods \u00d7 its size (small, medium, large by customs value within that section). \"Higher than 97%\n   of similar importers\" is fair across goods and sizes, and reads directly as a reason. A blank sits at 50%.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_072",
+      "id": "paragraph_ctrp_eda_072",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "7.1 Recency",
+      "text": "%pyspark\n# Each declaration of the last 3 years gets a weight by how long ago it was; the rates become weighted averages\nyear_weight = (F.when(F.col('adate') > F.add_months(snap_date, -12), 1.0)\n                .when(F.col('adate') > F.add_months(snap_date, -24), 0.5)\n                .otherwise(0.25))\nw = F.col('w')\n\ndef weighted_rate(column):\n    # (1 x count in year 1 + 0.5 x count in year 2 + 0.25 x count in year 3) / (the same for declarations)\n    return F.sum(w * column) / F.sum(w)\n\namended_01 = F.when(F.col('amended') == 'Y', 1).otherwise(0)\nfinal_tax_w = F.col('_orig_tax') + F.col('_top_up')\nrecency = (decl.where(F.col('dt') <= SNAP).withColumn('w', year_weight)\n               .groupBy('taxpayer_tin')\n               .agg(weighted_rate(F.col('topped_up')).alias('topped_up_per_decl_3y_rate'),\n                    weighted_rate(F.col('severe')).alias('severe_top_up_per_decl_3y_rate'),\n                    weighted_rate(amended_01).alias('amended_per_decl_3y_rate'),\n                    weighted_rate(F.col('negative_top_up')).alias('tax_reduced_per_decl_3y_rate'),\n                    F.sum(w * F.col('top_up')).alias('_top_up'),\n                    F.sum(w * F.col('orig_tax')).alias('_orig_tax'))\n               .withColumn('top_up_per_final_tax_3y_rate', F.when(final_tax_w > 0, F.col('_top_up') / final_tax_w))\n               .drop('_top_up', '_orig_tax'))\nparts['recency'] = recency\npeek(base.join(parts['topped_up_per_decl_24m_rate'], 'taxpayer_tin').join(recency, 'taxpayer_tin')\n         .select('taxpayer_tin', 'decl_24m_count', 'topped_up_per_decl_24m_rate', 'topped_up_per_decl_3y_rate'))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_073",
+      "id": "paragraph_ctrp_eda_073",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "7.2 One table",
+      "text": "%pyspark\n# Every part side by side: one row per taxpayer (small enough to work on in pandas from here)\nfeature_inputs = reduce(lambda table, part: table.join(part, 'taxpayer_tin', 'left'), parts.values(), base)\nsave(feature_inputs, 'ctrp_feature_inputs')\ntp = feature_inputs.orderBy('taxpayer_tin').toPandas()\nprint('{:,} taxpayers x {} columns'.format(*tp.shape))\npeek(tp)",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_074",
+      "id": "paragraph_ctrp_eda_074",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "7.3 Small numbers",
+      "text": "%pyspark\ndef credibility(rate, n, k=10):\n    # Pull a rate towards the average of everyone by weight n / (n + k), and only ever down\n    rate, n = rate.astype(float), n.fillna(0).astype(float)\n    has = rate.notna() & (n > 0)\n    average = (rate[has] * n[has]).sum() / n[has].sum()          # weighted by declarations (or items)\n    w = n / (n + k)\n    return np.minimum(rate, w * rate + (1 - w) * average)\n\n# Track A: the 8 scored features, each with the count it rests on.\n# Five use the 3-year (recency) version from 7.1, three stay at 24 months.\nTRACK_A = {'topped_up_per_decl_3y_rate': 'decl_24m_count',\n           'severe_top_up_per_decl_3y_rate': 'decl_24m_count',\n           'amended_per_decl_3y_rate': 'decl_24m_count',\n           'top_up_per_final_tax_3y_rate': 'decl_24m_count',\n           'peer_price_shortfall_per_value_24m_rate': 'priced_items_24m_count',\n           'tax_reduced_per_decl_3y_rate': 'decl_24m_count',\n           'top_up_last_180d_flag': 'decl_24m_count',\n           'away_from_main_station_per_decl_24m_rate': 'decl_24m_count'}\n\nfinal = tp[['taxpayer_tin', 'taxpayer_nm', 'decl_24m_count', 'customs_value_24m_ugx', 'top_up_24m_ugx']].copy()\nfinal.insert(1, 'snapshot_date', SNAPSHOT)\nfor col, n in TRACK_A.items():\n    final['raw_' + col] = tp[col]                        # before the small-numbers step (shown in reasons)\n    final[col] = credibility(tp[col], tp[n])             # what the scorecard reads\n\n# Track B: 17 features, all over 24 months. The five rates resting on a count get the same small-numbers step.\nTRACK_B = {'amended_per_decl_24m_rate': 'decl_24m_count',\n           'unpaid_tax_per_decl_24m_rate': 'decl_24m_count',\n           'price_keying_error_per_item_24m_rate': 'priced_items_24m_count',\n           'peer_price_shortfall_per_value_24m_rate': 'priced_items_24m_count',\n           'price_under_half_peer_per_item_24m_rate': 'priced_items_24m_count',\n           'median_price_dev_from_peer_24m_log': None,\n           'own_price_drop_per_recent_value_6m_rate': None,\n           'duty_under_half_peer_per_value_24m_rate': None,\n           'duty_gap_vs_peer_per_value_24m_rate': None,\n           'exempt_apc_per_value_24m_rate': None,\n           'watchlist_apc_per_value_24m_rate': None,\n           'pref_claimed_per_item_24m_rate': None,\n           'decl_90d_per_avg_qtr_24m_log': None,\n           'away_from_main_station_per_decl_24m_rate': None,\n           'hs4_per_decl_24m_ratio': None,\n           'same_day_split_per_decl_vs_norm_24m_diff': None,\n           'new_importer_24m_score': None}\nfor col, n in TRACK_B.items():\n    final['b_' + col] = credibility(tp[col], tp[n]) if n else tp[col].astype(float)\n\nexample = pd.DataFrame({'declarations': tp['decl_24m_count'],\n                        'amended, raw': final['raw_amended_per_decl_3y_rate'],\n                        'amended, after the small-numbers step': final['amended_per_decl_3y_rate']})\nz.show(example.sort_values('declarations').head(10))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_075",
+      "id": "paragraph_ctrp_eda_075",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "7.4 Peer groups",
+      "text": "%pyspark\nSECTIONS = [(1, 5, 'Live animals'), (6, 14, 'Vegetable products'), (15, 15, 'Fats and oils'),\n            (16, 24, 'Food, drink, tobacco'), (25, 27, 'Minerals and fuel'), (28, 38, 'Chemicals'),\n            (39, 40, 'Plastics and rubber'), (41, 43, 'Hides and leather'), (44, 46, 'Wood'),\n            (47, 49, 'Paper'), (50, 63, 'Textiles'), (64, 67, 'Footwear'), (68, 70, 'Stone, glass'),\n            (71, 71, 'Precious metals'), (72, 83, 'Base metals'), (84, 85, 'Machinery, electrical'),\n            (86, 89, 'Vehicles'), (90, 92, 'Instruments'), (93, 93, 'Arms'),\n            (94, 96, 'Miscellaneous manufactures'), (97, 99, 'Art and other')]\n\ndef hs_section(chapter):\n    # HS chapter (for example '61') -> its section (for example 'Textiles')\n    try:\n        c = int(float(chapter))\n    except (TypeError, ValueError):\n        return 'Unknown'\n    return next((name for low, high, name in SECTIONS if low <= c <= high), 'Unknown')\n\ndef size_tier(log_value):\n    # Small, medium, large: thirds by customs value within the section\n    if len(log_value) < 3:\n        return pd.Series('small', index=log_value.index)\n    return pd.qcut(log_value.rank(method='first'), 3, labels=['small', 'medium', 'large']).astype(str)\n\n# Main goods = the HS chapter with most of the taxpayer's customs value in the 24 months\nchapter = F.substring('hsc_cd', 1, 2).alias('chapter')\nby_chapter = hist_items.groupBy('taxpayer_tin', chapter).agg(F.sum('customs_value').alias('v'))\nlargest_first = Window.partitionBy('taxpayer_tin').orderBy(F.desc('v'))\nmain_chapter = (by_chapter.withColumn('rank', F.row_number().over(largest_first))\n                          .where('rank = 1').select('taxpayer_tin', F.col('chapter').alias('dominant_hs_chapter')))\nfinal = final.merge(main_chapter.toPandas(), on='taxpayer_tin', how='left')\n\nsection = final['dominant_hs_chapter'].map(hs_section).fillna('Unknown')\nlog_value = np.log1p(final['customs_value_24m_ugx'].clip(lower=0))\nfinal['peer_group'] = section + ', ' + log_value.groupby(section).transform(size_tier)\n\ndef percentile_name(col):\n    # the feature's name with its unit swapped for pct, for example b_amended_per_decl_24m_pct\n    return 'b_' + col.rsplit('_', 1)[0] + '_pct'\n\nfor col in TRACK_B:\n    final[percentile_name(col)] = final['b_' + col].groupby(final['peer_group']).rank(pct=True).fillna(0.5)\n\nz.show(final['peer_group'].value_counts().rename_axis('peer group').reset_index(name='taxpayers'))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_076",
+      "id": "paragraph_ctrp_eda_076",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "8. Final dataset",
+      "text": "%md\n## 8. The final dataset\n\nOne row per taxpayer. This is what the scorecard (Track A) and the model (Track B) read.\n\n| Columns | What they are |\n|---|---|\n| `taxpayer_tin`, `taxpayer_nm`, `snapshot_date` | who, and the date of the profile |\n| `decl_24m_count`, `customs_value_24m_ugx` | declarations and customs value (UGX) in the 24 months |\n| `limited_history` | `Y` = fewer than 10 declarations: the score rests on little history |\n| `no_top_up_history` | `Y` = no top-up in the 24 months: the group Track B is built for |\n| 8 Track A columns (for example `topped_up_per_decl_3y_rate`) | the values the scorecard reads |\n| the same starting `raw_` | before the small-numbers step (shown in the reasons) |\n| 17 columns starting `b_` | the Track B features |\n| the same ending `pct` (for example `b_amended_per_decl_24m_pct`) | the percentile within the peer group: what the model reads |\n| `peer_group` | main goods (HS section) and size |\n| `out_...` (past snapshots only) | what happened in the 6 months after: checks, checks that found a top-up, top-up amounts |",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_077",
+      "id": "paragraph_ctrp_eda_077",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "8.1 Final dataset",
+      "text": "%pyspark\nfinal['limited_history'] = np.where(final['decl_24m_count'] < 10, 'Y', 'N')\nfinal['no_top_up_history'] = np.where(final['top_up_24m_ugx'].fillna(0) <= 0, 'Y', 'N')\n\nif WITH_OUTCOMES:\n    after = decl.where(F.col('dt') > SNAP)\n    checked = (F.col('red') == 1) | (F.col('yellow') == 1)\n    outcomes = after.groupBy('taxpayer_tin').agg(\n        F.count('*').alias('out_entries'),\n        F.sum(F.when(checked, 1).otherwise(0)).alias('out_checked'),\n        F.sum(F.when(checked & (F.col('topped_up') == 1), 1).otherwise(0)).alias('out_checked_hits'),\n        F.sum('topped_up').alias('out_topped_up_entries'),\n        F.sum('top_up').alias('out_top_up'),\n        F.sum('orig_tax').alias('out_original_tax')).toPandas()\n    final = final.merge(outcomes, on='taxpayer_tin', how='left')\n    out_cols = [c for c in final if c.startswith('out_')]\n    final[out_cols] = final[out_cols].fillna(0)\n\nfirst = ['taxpayer_tin', 'taxpayer_nm', 'snapshot_date', 'decl_24m_count', 'customs_value_24m_ugx', 'limited_history',\n         'no_top_up_history', 'peer_group']\ntrack_a = list(TRACK_A) + ['raw_' + c for c in TRACK_A]\ntrack_b = ['b_' + c for c in TRACK_B] + [percentile_name(c) for c in TRACK_B]\nfinal_dataset = final[first + track_a + track_b + [c for c in final if c.startswith('out_')]]\nsave(final_dataset, 'ctrp_final_dataset')\nprint('{:,} taxpayers x {} columns, saved as ctrp_final_dataset'.format(*final_dataset.shape))\npeek(final_dataset)",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_078",
+      "id": "paragraph_ctrp_eda_078",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "8.2 Feature summary",
+      "text": "%pyspark\n# Each feature at a glance: how many taxpayers have it, its middle value and its top 5%\ncols = list(TRACK_A) + ['b_' + c for c in TRACK_B]\nz.show(pd.DataFrame({'feature': cols,\n                     'taxpayers with a value': [int(final_dataset[c].notna().sum()) for c in cols],\n                     'median': [final_dataset[c].median() for c in cols],\n                     '95th percentile': [final_dataset[c].quantile(0.95) for c in cols]}))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_079",
+      "id": "paragraph_ctrp_eda_079",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "8.3 Check",
+      "text": "%md\n### 8.3 Do these numbers match production?\n\nProduction builds the same columns with one query (`sql/live_<date>.sql`, or the \"CTRP extracts\" note). If that\nextract is in this session (a table named like `live_2026_09_30` or `bt_2026_03_31`) or saved as a table\n(`PRODUCTION_TABLE` in Settings), each column is compared, taxpayer by taxpayer. Every column should match,\nbecause both use the same rules on the same data. Differences under 0.00001 count as a match: when Spark runs the\nproduction query it rounds some rates to 5 decimal places. Larger differences can come from rows changed in the\nview since the extract was pulled (a payment made, a top-up raised later).",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_080",
+      "id": "paragraph_ctrp_eda_080",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "8.3 Check",
+      "text": "%pyspark\nname = PRODUCTION_TABLE or ('%s_%s' % ('bt' if WITH_OUTCOMES else 'live', SNAPSHOT.replace('-', '_')))\ntry:\n    prod = spark.table(name)\nexcept Exception:\n    prod = None\n    print('No production extract named %s in this session: check skipped.' % name)\n\nif prod is not None:\n    PRODUCTION_COLUMN = {'decl_24m_count': 'entries_24m',\n                         'customs_value_24m_ugx': 'total_customs_value',\n                         'original_tax_24m_ugx': 'total_original_tax',\n                         'top_up_24m_ugx': 'total_top_up',\n                         'topped_up_per_decl_24m_rate': 'top_up_entry_rate',\n                         'severe_top_up_per_decl_24m_rate': 'par077_severe_top_up_rate',\n                         'amended_per_decl_24m_rate': 'par045_amended_entry_rate',\n                         'top_up_per_final_tax_24m_rate': 'par048_top_up_share_final',\n                         'tax_reduced_per_decl_24m_rate': 'par066_negative_top_up_rate',\n                         'days_since_last_top_up': 'par105_days_since_last_top_up',\n                         'top_up_last_180d_flag': 'par105_top_up_180d',\n                         'main_station_per_decl_24m_rate': 'main_station_share',\n                         'away_from_main_station_per_decl_24m_rate': 'par023_station_spread',\n                         'priced_items_24m_count': 'items_benchmarked',\n                         'peer_price_shortfall_per_value_24m_rate': 'par076_shortfall_share',\n                         'topped_up_per_decl_3y_rate': 'top_up_entry_rate_3y',\n                         'severe_top_up_per_decl_3y_rate': 'par077_severe_top_up_rate_3y',\n                         'amended_per_decl_3y_rate': 'par045_amended_entry_rate_3y',\n                         'tax_reduced_per_decl_3y_rate': 'par066_negative_top_up_rate_3y',\n                         'top_up_per_final_tax_3y_rate': 'par048_top_up_share_final_3y',\n                         'unpaid_tax_per_decl_24m_rate': 'ctx_unpaid_rate',\n                         'pref_claimed_per_item_24m_rate': 'ctx_preferential_use_rate',\n                         'price_keying_error_per_item_24m_rate': 'ctx_implausible_price_rate',\n                         'price_under_half_peer_per_item_24m_rate': 'par076_low_price_item_rate',\n                         'median_price_dev_from_peer_24m_log': 'price_deviation_median',\n                         'priced_on_coo_peer_per_item_24m_rate': 'origin_benchmark_share',\n                         'own_price_drop_per_recent_value_6m_rate': 'own_price_drop_share',\n                         'hs_codes_compared_count': 'hs_codes_compared',\n                         'duty_under_half_peer_per_value_24m_rate': 'low_duty_value_share',\n                         'duty_gap_vs_peer_per_value_24m_rate': 'duty_gap_share',\n                         'exempt_apc_per_value_24m_rate': 'exemption_apc_value_share',\n                         'watchlist_apc_per_value_24m_rate': 'watchlist_apc_value_share',\n                         'same_day_split_per_decl_24m_rate': 'same_day_split_share',\n                         'same_day_norm_per_decl_24m_rate': 'same_day_split_expected',\n                         'same_day_split_per_decl_vs_norm_24m_diff': 'same_day_split_excess',\n                         'decl_90d_count': 'entries_last_90d',\n                         'decl_90d_per_avg_qtr_24m_log': 'surge',\n                         'hs4_24m_count': 'hs_headings_used',\n                         'hs4_per_decl_24m_ratio': 'goods_spread',\n                         'days_since_first_decl_24m': 'days_since_first_in_window',\n                         'new_importer_24m_score': 'newness'}\n    COMPARE = [c for c in PRODUCTION_COLUMN if c in feature_inputs.columns and PRODUCTION_COLUMN[c] in prod.columns]\n    mine = feature_inputs.select('taxpayer_tin', *[F.col(c).alias('a_' + c) for c in COMPARE])\n    theirs = prod.select(F.col('taxpayer_tin').cast('string').alias('taxpayer_tin'),\n                         *[F.col(PRODUCTION_COLUMN[c]).cast('double').alias('b_' + c) for c in COMPARE])\n    both = mine.join(theirs, 'taxpayer_tin')\n    def same(c):\n        a, b = F.col('a_' + c), F.col('b_' + c)\n        return (a.isNull() & b.isNull()) | (F.abs(a - b) <= 1e-5 + 1e-6 * F.abs(b))     # see the note above\n    share_same = [F.avg(F.coalesce(same(c), F.lit(False)).cast('double')).alias(c) for c in COMPARE]\n    result = both.select(F.count('*').alias('taxpayers in both'), *share_same).toPandas()\n    print('Taxpayers here: {:,}, in production: {:,}, in both: {:,}'.format(\n        feature_inputs.count(), prod.count(), int(result['taxpayers in both'][0])))\n    by_column = result.drop(columns='taxpayers in both').T.reset_index()\n    z.show(by_column.rename(columns={'index': 'column', 0: 'share matching'}))",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false,
+          "completionSupport": true
+        },
+        "editorMode": "ace/mode/python",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": true,
+        "editorHide": false,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_081",
+      "id": "paragraph_ctrp_eda_081",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    },
+    {
+      "title": "8.4 Getting the outputs",
+      "text": "%md\n### 8.4 Getting the outputs into Excel\n\nEvery result is a table in this session:\n\n| Table | What |\n|---|---|\n| `ctrp_eda_summary` | the data problems found, with counts |\n| `ctrp_eda_e01`, `ctrp_eda_e02`, ... | the rows behind each data problem, one table per problem |\n| `ctrp_cleaning_log` | rows removed by each cleaning rule |\n| `ctrp_feature_inputs` | every feature before the steps of Part 7 |\n| `ctrp_final_dataset` | the final dataset |\n\nTo get them out:\n* **Small tables:** the download button above any `z.show` result.\n* **With a folder you can write to:** set `SAVE_TO_FOLDER = True` and `OUT_DIR` in Settings and run again. Each table\n  becomes a folder holding one CSV file.\n* **With a Hive schema you can write to:** set `SAVE_TO_SCHEMA`. Each table can then be downloaded from Hue (as\n  Excel), or read from VS Code.\n\nThen put the CSV files in one folder of the project, each named after its table (for example\n`data/zeppelin_eda/ctrp_final_dataset.csv`), and run `python main.py eda-excel data/zeppelin_eda`. It makes one\nworkbook per data problem (for the Risk Officers to give their verdict) and one workbook with the final dataset and\na list of the 22 features.",
+      "user": "anonymous",
+      "dateUpdated": "2026-10-20 00:00:00.000",
+      "progress": 0,
+      "config": {
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true,
+          "completionSupport": false
+        },
+        "editorMode": "ace/mode/markdown",
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "title": false,
+        "editorHide": true,
+        "results": {},
+        "enabled": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "runtimeInfos": {},
+      "progressUpdateIntervalMs": 500,
+      "jobName": "paragraph_ctrp_eda_082",
+      "id": "paragraph_ctrp_eda_082",
+      "dateCreated": "2026-10-20 00:00:00.000",
+      "status": "READY"
+    }
+  ],
+  "name": "CTRP EDA and features",
+  "id": "CTRPEDAFEAT01",
+  "defaultInterpreterGroup": "spark",
+  "version": "0.10.1",
+  "noteParams": {},
+  "noteForms": {},
+  "angularObjects": {},
+  "config": {
+    "isZeppelinNotebookCronEnable": false
+  },
+  "info": {}
+}

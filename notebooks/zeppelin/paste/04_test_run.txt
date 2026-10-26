@@ -1,0 +1,3 @@
+%pyspark
+# ---------- 4. Test run: one snapshot, to see how long each one takes ----------------------
+run_snapshot(*TEST_SNAPSHOT)

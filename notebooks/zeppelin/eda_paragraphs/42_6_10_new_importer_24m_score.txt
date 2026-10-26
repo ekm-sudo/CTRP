@@ -1,0 +1,17 @@
+%pyspark
+day = F.col('assessment_dt_wid').cast('string')
+earlier_importers = (spark.table(VIEW)
+    .where((day > PRIOR_START) & (day <= HIST_START)
+           & F.col('regime_cd').isin('IM4', 'IM7') & (F.col('decl_status') != 'Cancelled')
+           & F.col('taxpayer_tin').cast('string').rlike('^[0-9]{10}$'))
+    .select(F.col('taxpayer_tin').cast('string').alias('taxpayer_tin')).distinct()
+    .withColumn('imported_before', F.lit(1)))
+
+days_since_first = F.datediff(snap_date, F.min('adate'))
+first_seen = hist.groupBy('taxpayer_tin').agg(days_since_first.alias('days_since_first_decl_24m'))
+parts['new_importer_24m_score'] = (first_seen.join(earlier_importers, 'taxpayer_tin', 'left')
+    .withColumn('new_trader', F.when(F.col('imported_before').isNull(), 'Y').otherwise('N'))
+    .withColumn('new_importer_24m_score', -F.log1p(F.greatest('days_since_first_decl_24m', F.lit(0)))
+                           + F.when(F.col('new_trader') == 'Y', 1.0).otherwise(0.0))
+    .drop('imported_before'))
+peek(parts['new_importer_24m_score'])

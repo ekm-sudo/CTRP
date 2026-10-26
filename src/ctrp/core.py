@@ -33,7 +33,7 @@ from ctrp.utils import load_extract  # noqa: F401  (kept here so M.load_extract 
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-MODEL_VERSION = '1.0.0-dev4'
+MODEL_VERSION = '1.0.0-dev5'
 
 
 # =========================================================================================
@@ -46,42 +46,44 @@ MODEL_VERSION = '1.0.0-dev4'
 
 # ---- L2 scorecard: the risk parameters -------------------------------------------------
 # Each parameter is turned into a 0..1 scale:
-#   zero_at  value where concern begins (0 below it)
+#   zero_at  minimum risk level: where points begin (0 below it)
 #   one_at   value where it is as bad as it gets (1 from there)
 # Weight = L x I / total of all L x I  (L = likelihood, I = impact, each 1 to 5).
 # L and I below are Data Science working ratings set from the back-test (DECISIONS 41):
 # the three parameters that predict later top-ups carry most of the weight.
 #   PAR_045T 33%, PAR_077 26%, PAR_045 21%, the other five 4% each.
-# reason: the fixed sentence shown to officers. {v} = taxpayer's value, {z} = concern level,
+# reason: the fixed sentence shown to officers. {v} = taxpayer's value, {z} = minimum risk level,
 #         {o} = maximum. fmt says how to write them: 'pct' (percent) or 'yesno'.
 PARAMS = [
     # Officers' rule "entries with top-up / total entries". Maximum at 40%, not their 10%:
     # at 10%, 35% of regular traders hit full points and the scale stops ranking (DECISIONS 42).
     dict(code='PAR_045T', col='top_up_entry_rate', zero_at=0.03, one_at=0.40, L=5, I=5, fmt='pct',
          label='Declarations topped up',
-         reason='{v} of declarations needed a top-up (concern from {z}, maximum at {o})'),
+         reason='{v} of declarations needed a top-up (minimum risk level {z}, maximum at {o})'),
     dict(code='PAR_077', col='par077_severe_top_up_rate', zero_at=0.02, one_at=0.20, L=4, I=5, fmt='pct',
          label='Severe top-ups',
-         reason='{v} of declarations had a top-up of 30% or more of the final tax (concern from {z}, maximum at {o})'),
+         reason='{v} of declarations had a top-up of 30% or more of the final tax '
+                '(minimum risk level {z}, maximum at {o})'),
     dict(code='PAR_045', col='par045_amended_entry_rate', zero_at=0.10, one_at=0.50, L=4, I=4, fmt='pct',
          label='Declarations amended',
-         reason='{v} of declarations were amended (concern from {z}, maximum at {o})'),
+         reason='{v} of declarations were amended (minimum risk level {z}, maximum at {o})'),
     # Measured over FINAL tax so it stays between 0 and 1 (DECISIONS 32 and 40).
     dict(code='PAR_048', col='par048_top_up_share_final', zero_at=0.05, one_at=0.25, L=3, I=1, fmt='pct',
          label='Top-ups as a share of final tax',
-         reason='Top-ups made up {v} of the final tax (concern from {z}, maximum at {o})'),
+         reason='Top-ups made up {v} of the final tax (minimum risk level {z}, maximum at {o})'),
     dict(code='PAR_076', col='par076_shortfall_share', zero_at=0.02, one_at=0.20, L=3, I=1, fmt='pct',
          label='Value below benchmark',
-         reason='Declared prices short of the HS benchmark by {v} of declared value (concern from {z}, maximum at {o})'),
+         reason='Declared prices short of the HS benchmark by {v} of declared value '
+                '(minimum risk level {z}, maximum at {o})'),
     dict(code='PAR_066', col='par066_negative_top_up_rate', zero_at=0.02, one_at=0.20, L=3, I=1, fmt='pct',
          label='Tax reduced after assessment',
-         reason='{v} of declarations had their tax reduced after assessment (concern from {z}, maximum at {o})'),
+         reason='{v} of declarations had their tax reduced after assessment (minimum risk level {z}, maximum at {o})'),
     dict(code='PAR_105', col='par105_top_up_180d', zero_at=0.0, one_at=1.0, L=3, I=1, fmt='yesno',
          label='Recent top-ups',
          reason='A top-up was raised within 180 days of the snapshot: {v}'),
     dict(code='PAR_023', col='par023_station_spread', zero_at=0.30, one_at=0.70, L=3, I=1, fmt='pct',
          label='Clearance away from main station',
-         reason='{v} of declarations cleared away from the main station (concern from {z}, maximum at {o})'),
+         reason='{v} of declarations cleared away from the main station (minimum risk level {z}, maximum at {o})'),
 ]
 
 # Threshold profiles: alternative settings kept for comparison (DECISIONS 34).
@@ -97,6 +99,16 @@ PROFILES = {
 # average by weight n / (n + K), where n = the taxpayer's declarations. Only ever DOWN.
 SHRINK_K = 10                                                 # None switches it off
 SHRINK_N = {'par076_shortfall_share': 'items_benchmarked'}    # n for PAR_076 is items, not declarations
+# ---- Recency: how much each year of history counts (DECISIONS 92 to 94) -----------------
+# The top-up, severe top-up, amendment and tax-reduction rates and the top-up share of tax are
+# built from the last 3 years, the latest year counting fully, the year before half, the one
+# before that a quarter: rate = (1 x count1 + 0.5 x count2 + 0.25 x count3) / (the same for
+# declarations). Tested on 18 dates since Sep 2017: better than two equal years on all 18.
+# Halving keeps old mistakes visible but lets a trader who has cleaned up recover within ~2 years.
+# Used when the extract has the yearly counts (y1_/y2_/y3_ columns); otherwise the 24-month rates.
+RECENCY_WEIGHTS = (1.0, 0.5, 0.25)
+RECENCY_RATES = {'top_up_entry_rate': 'topped_up', 'par077_severe_top_up_rate': 'severe',
+                 'par045_amended_entry_rate': 'amended', 'par066_negative_top_up_rate': 'tax_reduced'}
 ADEQUATE_ENTRIES = 10        # fewer than this: "limited history", no peer group, no pattern points
 
 # ---- L1 peer groups: main goods (HS section) x size tier (DECISIONS 44) ------------------
@@ -114,6 +126,33 @@ PEER_FEATURES = ['log_value', 'log_entries', 'active_months', 'avg_items_per_ent
                  'hs_headings_used', 'origins_used', 'cpcs_used', 'stations_used_24m',
                  'chapter_value_share']
 PATTERN_FEATURES = ['volume_trend', 'im7_share', 'top_up_entry_rate', 'stations_used_90d']
+# How each pattern-check input is shown in the note: (column to show, plain label, format)
+PATTERN_LABELS = {
+    'log_value': ('total_customs_value', 'customs value of UGX {v} in 24 months', 'money'),
+    'log_entries': ('entries_24m', '{v} declarations in 24 months', 'int'),
+    'active_months': ('active_months', 'imported in {v} of the last 24 months', 'int'),
+    'avg_items_per_entry': ('avg_items_per_entry', '{v} items per declaration', 'num'),
+    'hs_headings_used': ('hs_headings_used', '{v} different HS headings', 'int'),
+    'origins_used': ('origins_used', '{v} countries of origin', 'int'),
+    'cpcs_used': ('cpcs_used', '{v} procedure codes', 'int'),
+    'stations_used_24m': ('stations_used_24m', '{v} clearing stations', 'int'),
+    'chapter_value_share': ('chapter_value_share', '{v} of value in its main HS chapter', 'pct'),
+    'volume_trend': ('entries_last_90d', '{v} declarations in the last 90 days', 'int'),
+    'im7_share': ('im7_share', '{v} of declarations into bond (IM7)', 'pct'),
+    'top_up_entry_rate': ('top_up_entry_rate', '{v} of declarations topped up', 'pct'),
+    'stations_used_90d': ('stations_used_90d', '{v} clearing stations in the last 90 days', 'int'),
+}
+# The scored parameters, written the same way for the pattern note
+PATTERN_PARAM_TEXT = {
+    'top_up_entry_rate': '{v} of declarations topped up',
+    'par077_severe_top_up_rate': '{v} of declarations had a severe top-up (30% or more of the final tax)',
+    'par045_amended_entry_rate': '{v} of declarations amended',
+    'par048_top_up_share_final': 'top-ups were {v} of the final tax',
+    'par076_shortfall_share': 'declared prices short of the HS benchmark by {v} of declared value',
+    'par066_negative_top_up_rate': '{v} of declarations had tax reduced after assessment',
+    'par105_top_up_180d': 'top-up in the last 180 days: {v}',
+    'par023_station_spread': '{v} of declarations cleared away from the main station',
+}
 UNBOUNDED = ['par076_shortfall_share']     # squashed with log before the pattern check
 MIN_GROUP_FOR_PATTERN = 30                 # smaller groups are pooled into "Other goods, <size>"
 PATTERN_NOTE_PCT = 0.95                    # note when more unusual than 95% of the peer group
@@ -125,10 +164,12 @@ SEED = 42                                  # fixed, so the same input always giv
 
 # ---- Notes: written beside a score, carry no points --------------------------------------
 NOTES = {
-    'PAT': 'Trading pattern more unusual than {p} of the peer group (pattern check, no points)',
+    'PAT': ('Unusual trading pattern (note only, does not change the score): more unusual than {p} of '
+            'similar importers ({g}). Biggest differences: {e}'),
     'LIM': 'Fewer than {n} declarations in 24 months: the score rests on little history',
     'NPE': 'No close peer group: pattern check compared with a pooled group',
-    'LAG': 'Parameters and pattern check disagree: worth a closer look either way',
+    'LAG': ('History score and trading pattern point opposite ways (low score but very unusual pattern, or high '
+            'score but very typical pattern): worth a closer look either way'),
     'MIS': '{k} of {t} parameters could not be computed; the rest were reweighted',
 }
 
@@ -148,7 +189,8 @@ def set_profile(name):
 def config_dict():
     return dict(version=MODEL_VERSION, profile=PROFILE, params=PARAMS, adequate=ADEQUATE_ENTRIES, shrink=SHRINK_K,
                 peer=PEER_FEATURES, pattern=PATTERN_FEATURES, pattern_note=PATTERN_NOTE_PCT,
-                min_group=MIN_GROUP_FOR_PATTERN, bands=BANDS, seed=SEED, low_agree=LOW_AGREE)
+                min_group=MIN_GROUP_FOR_PATTERN, bands=BANDS, seed=SEED, low_agree=LOW_AGREE,
+                recency=RECENCY_WEIGHTS)
 
 
 def config_fingerprint():
@@ -159,10 +201,35 @@ def config_fingerprint():
 # =========================================================================================
 # PREPARATION
 # =========================================================================================
+def apply_recency(d):
+    """What: rebuild the history rates from the yearly counts with RECENCY_WEIGHTS.
+    Why:  recent behaviour says more about the next six months than behaviour three years ago.
+          Taxpayers with no declarations in the weighted window keep their 24-month rates."""
+    counts = ['entries', 'top_up_ugx', 'original_tax_ugx', *RECENCY_RATES.values()]
+    need = [f'y{k}_{c}' for k in (1, 2, 3) for c in counts]
+    if not RECENCY_WEIGHTS or any(c not in d for c in need):
+        d['recency_applied'] = False
+        return d
+
+    def w(c):
+        """The weighted 3-year total of one count: 1 x year 1 + 0.5 x year 2 + 0.25 x year 3."""
+        return sum(wk * d[f'y{k}_{c}'].fillna(0) for k, wk in zip((1, 2, 3), RECENCY_WEIGHTS))
+    n = w('entries')
+    ok = n > 0
+    for col, c in RECENCY_RATES.items():
+        d[col] = (w(c) / n).where(ok, d[col])
+    tu, ot = w('top_up_ugx'), w('original_tax_ugx')
+    d['total_top_up'] = tu.where(ok, d['total_top_up'])
+    d['total_original_tax'] = ot.where(ok, d['total_original_tax'])
+    d['par048_top_up_ratio'] = (tu / ot.where(ot != 0)).where(ok, d['par048_top_up_ratio'])
+    d['recency_applied'] = ok
+    return d
+
+
 def derive(df):
     """What: add the columns the model needs that the SQL does not give directly.
     Why:  keeps the SQL simple; small calculations are easier to read and test here."""
-    d = df.copy()
+    d = apply_recency(df.copy())
 
     # Measures built from SQL columns
     d['par105_top_up_180d'] = (d['par105_days_since_last_top_up'] <= 180).astype(float)
@@ -192,14 +259,17 @@ def _shrink_small_counts(d):
             continue
         n = d[SHRINK_N.get(col, 'entries_24m')].fillna(0)
         has = d[col].notna()
-        prior = (d.loc[has, col] * n[has]).sum() / n[has].sum()     # declaration-weighted average
+        if not (n[has] > 0).any():                  # the input is not in this extract (e.g. PAR_076 in the long run)
+            d[col + '_raw'] = d[col]
+            continue
+        prior =(d.loc[has, col] * n[has]).sum() / n[has].sum()     # declaration-weighted average
         w = n / (n + SHRINK_K)
         d[col + '_raw'] = d[col]
         d[col] = np.minimum(d[col], w * d[col] + (1 - w) * prior)
 
 
 def scale(x, zero_at, one_at):
-    """0 at the concern level, 1 at the maximum, a straight line between, held at the ends."""
+    """0 at the minimum risk level, 1 at the maximum, a straight line between, held at the ends."""
     return ((x - zero_at) / (one_at - zero_at)).clip(0, 1)
 
 
@@ -286,9 +356,22 @@ def layer2_scorecard(d):
 #       many products, not traders who are later topped up (DECISIONS 46). Kept as a note so
 #       officers still see an odd profile.
 # =========================================================================================
+def _show(v, kind):
+    if pd.isna(v):
+        return 'n/a'
+    if kind == 'yesno':
+        return 'yes' if v >= 0.5 else 'no'
+    return {'money': f'{v:,.0f}', 'int': f'{v:,.0f}', 'pct': f'{v:.0%}', 'num': f'{v:,.1f}'}.get(kind, f'{v:.3g}')
+
+
 def layer3_pattern(d, peers, subtotal):
     cols = list(dict.fromkeys([p['col'] for p in PARAMS] + PEER_FEATURES + PATTERN_FEATURES))
+    pinfo = {p['col']: (p['col'] + '_raw' if p['col'] + '_raw' in d else p['col'], PATTERN_PARAM_TEXT[p['col']],
+                        p['fmt']) for p in PARAMS}
+    labels = {**PATTERN_LABELS, **pinfo}
+    scored = set(pinfo)
     pct = pd.Series(np.nan, index=d.index)
+    evidence = pd.Series('', index=d.index)
     for _, idx in peers.groupby('peer_group').groups.items():
         sub = d.loc[idx, cols].astype(float).copy()
         for c in UNBOUNDED:
@@ -298,6 +381,23 @@ def layer3_pattern(d, peers, subtotal):
             continue
         forest = IsolationForest(n_estimators=200, random_state=SEED).fit(sub)
         pct.loc[idx] = pd.Series(-forest.score_samples(sub), index=idx).rank(pct=True)
+        # What: for a flagged taxpayer, the two inputs on which it sits furthest from its peers,
+        #       shown as its own value against the peer-group median.
+        # Why:  "unusual" alone gives an officer nothing to check; the two most extreme
+        #       measures say what is unusual and by how much.
+        flagged = [i for i in idx if pct.at[i] >= PATTERN_NOTE_PCT]
+        if not flagged:
+            continue
+        far = (sub.rank(pct=True) - 0.5).abs()
+        show = {c: labels[c] for c in cols if c in labels}
+        med = {c: d.loc[idx, show[c][0]].median() for c in show}
+        for i in flagged:
+            top = far.loc[i, list(show)].sort_values(ascending=False).head(2).index
+            evidence.at[i] = '; '.join(
+                show[c][1].format(v=_show(d.at[i, show[c][0]], show[c][2]))
+                + f' (similar importers: {_show(med[c], show[c][2])}'
+                + ('; already counted in the score)' if c in scored else ')') for c in top) + '.'
+    layer3_pattern.evidence = evidence
 
     # Low agreement: scorecard and pattern check point opposite ways
     s_pct = subtotal.rank(pct=True)
@@ -335,7 +435,7 @@ def build_reasons(d, points):
         text = p['reason'].format(v=_fmt(v, p['fmt']), z=_fmt(p['zero_at'], p['fmt']),
                                   o=_fmt(p['one_at'], p['fmt']))
         rows.append((idx, code, p['label'], text, v, p['zero_at'], p['one_at'], pts))
-    r = pd.DataFrame(rows, columns=['_idx', 'code', 'label', 'reason', 'value', 'concern_level',
+    r = pd.DataFrame(rows, columns=['_idx', 'code', 'label', 'reason', 'value', 'minimum_risk_level',
                                     'maximum_level', 'points'])
     r = r.sort_values(['_idx', 'points', 'code'], ascending=[True, False, True])
     r['order'] = r.groupby('_idx').cumcount() + 1
@@ -346,7 +446,9 @@ def build_notes(s):
     """Notes (no points): an unusual pattern, and how much weight a score can bear."""
     notes = []
     for idx in s.index[s['flag_unusual_pattern'] == 'Y']:
-        notes.append((idx, 'PAT', NOTES['PAT'].format(p=f"{s.at[idx, 'pattern_percentile']:.0%}")))
+        notes.append((idx, 'PAT', NOTES['PAT'].format(p=f"{min(s.at[idx, 'pattern_percentile'], 0.99):.0%}",
+                                                      g=s.at[idx, 'peer_group_name'],
+                                                      e=s.at[idx, 'pattern_evidence'])))
     for idx in s.index[s['flag_limited_history'] == 'Y']:
         notes.append((idx, 'LIM', NOTES['LIM'].format(n=ADEQUATE_ENTRIES)))
     for idx in s.index[s['flag_no_close_peers'] == 'Y']:
@@ -374,6 +476,7 @@ class Result:
     reasons: pd.DataFrame
     params: pd.DataFrame
     log: list = field(default_factory=list)
+    track_b: object = None          # Track B (discovery) table, added by the pipeline when it can run
     version: str = MODEL_VERSION
     fingerprint: str = ''
 
@@ -402,6 +505,7 @@ def score_snapshot(raw):
     s['scorecard_points'] = subtotal.round(2)
     s['pattern_percentile'] = pat_pct.round(3)
     s['flag_unusual_pattern'] = np.where(pat_pct >= PATTERN_NOTE_PCT, 'Y', 'N')
+    s['pattern_evidence'] = layer3_pattern.evidence
     s['params_scored'] = available.sum(axis=1)
     s['params_total'] = available.shape[1]
     s['peer_group'] = peers['peer_group'].reindex(d.index).fillna(-1).astype(int)
@@ -429,7 +533,7 @@ def score_snapshot(raw):
 
     reasons = reasons.merge(s[['taxpayer_tin', 'score', 'band']], left_on='_idx', right_index=True)
     reasons = reasons[['taxpayer_tin', 'score', 'band', 'order', 'code', 'label', 'reason', 'value',
-                       'concern_level', 'maximum_level', 'points']]
+                       'minimum_risk_level', 'maximum_level', 'points']]
     reasons = reasons.sort_values(['score', 'taxpayer_tin', 'order'], ascending=[False, True, True])
 
     pv = d[['taxpayer_tin'] + [p['col'] for p in PARAMS]].copy()
@@ -438,7 +542,7 @@ def score_snapshot(raw):
             pv[f'points_{p["code"]}'] = points[p['code']]
     pv = pv.loc[s.index]
 
-    return Result(snapshot=snap, scores=s.drop(columns='_rank_key').reset_index(drop=True),
+    return Result(snapshot=snap, scores=s.drop(columns=['_rank_key', 'pattern_evidence']).reset_index(drop=True),
                   reasons=reasons.reset_index(drop=True), params=pv.reset_index(drop=True), log=log,
                   fingerprint=config_fingerprint())
 

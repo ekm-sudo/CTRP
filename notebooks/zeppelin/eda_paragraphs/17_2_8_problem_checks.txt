@@ -1,0 +1,82 @@
+%pyspark
+# Every column the officers need to judge an entry, in the order of the officer workbooks
+DETAIL = ['entry_key', 'entry_num', 'clearance_station_cd', 'dec_ref_yer', 'instance_id', 'key_itm_nbr',
+          'assessment_dt_wid', 'taxpayer_tin', 'taxpayer_nm', 'consignee_tin', 'consignee_nm', 'regime_cd',
+          'extended_proc_cd', 'cpc_cd', 'decl_status', 'hsc_cd', 'gds_org_cty', 'customs_value',
+          'net_weight', 'supplementary_qnty', 'tax_assessed', 'original_tax_amt', 'final_amt', 'top_up_amt',
+          'top_up_flg', 'amendment_flg', 'is_red_flg', 'is_yellow_flg', 'pay_status',
+          'preferential_treatment_flag']
+eda_rows = eda.select(*DETAIL)
+
+def rows_of(selected, key='instance_id'):
+    # Every item row of the declarations (or entries) in `selected`
+    return eda_rows.join(selected.select(key).distinct(), key, 'left_semi').select(*DETAIL)
+
+# One row per declaration, for the tax and lane checks
+eda_decl = (eda_rows.groupBy('entry_key', 'instance_id')
+                    .agg(F.max('top_up_flg').alias('flag'),
+                         F.max('original_tax_amt').alias('orig_raw'),
+                         F.max('final_amt').alias('fin'),
+                         F.max('top_up_amt').alias('top_up_amt_max'),
+                         F.max('is_red_flg').alias('red'),
+                         F.max('is_yellow_flg').alias('yellow'))
+                    .withColumn('orig', F.coalesce('orig_raw', 'fin'))
+                    .cache())
+flag, fin, orig_raw = F.col('flag'), F.col('fin'), F.col('orig_raw')
+not_flagged = F.coalesce(flag, F.lit('N')) != 'Y'
+
+def e01():
+    ids = (eda_rows.groupBy('entry_key').agg(F.countDistinct('instance_id').alias('declaration_ids_on_entry'))
+                   .where('declaration_ids_on_entry > 1'))
+    return ids.join(eda_rows, 'entry_key').select('declaration_ids_on_entry', *DETAIL)
+
+def e02():
+    copies = (eda_rows.groupBy('instance_id', 'key_itm_nbr').agg(F.count('*').alias('copies_of_item'))
+                      .where('copies_of_item > 1'))
+    return copies.join(eda_rows, ['instance_id', 'key_itm_nbr']).select('copies_of_item', *DETAIL)
+
+def e03():
+    return eda_rows.where(~F.coalesce(F.col('taxpayer_tin'), F.lit('')).rlike('^[0-9]{10}$'))
+
+def e04():
+    return rows_of(eda_rows.where(F.col('decl_status') == 'Cancelled'))
+
+def e05():
+    return rows_of(eda_rows.where(F.col('cpc_cd') == '483'))
+
+def e06():
+    return rows_of(eda_decl.where((flag == 'Y') & ~(fin > F.col('orig'))))
+
+def e07():
+    return rows_of(eda_decl.where(not_flagged & orig_raw.isNotNull() & (fin > orig_raw)))
+
+def e08():
+    return rows_of(eda_decl.where(orig_raw.isNull()))
+
+def e09():
+    return rows_of(eda_decl.where(not_flagged & (F.col('top_up_amt_max') == fin) & (fin > 0)))
+
+def e11():
+    no_value = F.coalesce('customs_value', F.lit(0)) <= 0
+    no_weight = F.coalesce('net_weight', F.lit(0)) <= 0
+    return rows_of(eda_rows.where(no_value | no_weight))
+
+# (code, title, check, keep 1 in K of the entries)
+ISSUES = [
+    ('E01', 'Same entry under more than one declaration ID', e01, 1),
+    ('E02', 'The same item row repeated', e02, 1),
+    ('E03', 'TIN blank or not 10 digits', e03, 1),
+    ('E04', 'Cancelled declarations', e04, 1),
+    ('E05', 'APC 483 (destroyed or abandoned goods, dummy reconciliation entries)', e05, 1),
+    ('E06', 'Top-up flag Y, but the final tax is not above the original tax', e06, 1),
+    ('E07', 'Tax rose, but no top-up flag', e07, 1),
+    ('E08', 'Original tax blank', e08, 50),
+    ('E09', 'top_up_amt holds the final tax on declarations without a top-up', e09, 50),
+    ('E11', 'Value or weight zero, negative or missing', e11, 1),
+]
+
+def sample(df, k):
+    # A random 1 in k of the entries (all rows of each entry kept), when a problem touches too many to read
+    return df if k == 1 else df.where(F.pmod(F.hash('entry_key'), k) == 0)
+
+print('%d problem checks defined' % len(ISSUES))

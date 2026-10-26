@@ -1,0 +1,4 @@
+%pyspark
+unpaid = F.when((F.col('pay_status') == 'NOT_PAID') & (F.col('final_tax') > 0), 1.0).otherwise(0.0)
+parts['unpaid_tax_per_decl_24m_rate'] = hist.groupBy('taxpayer_tin').agg(F.avg(unpaid).alias('unpaid_tax_per_decl_24m_rate'))
+peek(parts['unpaid_tax_per_decl_24m_rate'])

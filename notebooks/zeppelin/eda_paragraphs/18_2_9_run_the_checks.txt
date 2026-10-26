@@ -1,0 +1,13 @@
+%pyspark
+summary = []
+for code, title, check, k in ISSUES:
+    found = sample(check(), k).cache()
+    n_found, n_rows = found.select('entry_key').distinct().count(), found.count()
+    save(found, 'ctrp_eda_' + code.lower())
+    summary.append((code, title, n_found, n_rows, k))
+    print('%s  %-70s %10s %s  %10s rows' % (code, title[:70], format(n_found, ','),
+                                           'entries ', format(n_rows, ',')))
+
+eda_summary = pd.DataFrame(summary, columns=['issue', 'title', 'entries_or_taxpayers', 'rows', 'sample_1_in'])
+save(eda_summary, 'ctrp_eda_summary')
+z.show(eda_summary)

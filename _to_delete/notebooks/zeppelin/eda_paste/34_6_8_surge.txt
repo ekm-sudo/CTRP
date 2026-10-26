@@ -1,0 +1,7 @@
+%pyspark
+recent = F.when(F.col('adate') > F.date_sub(snap_date, 90), 1).otherwise(0)
+parts['surge'] = (hist.groupBy('taxpayer_tin')
+                      .agg(F.count('*').alias('_n'), F.sum(recent).alias('entries_last_90d'))
+                      .withColumn('surge', F.log((F.col('entries_last_90d') + 1) / (F.col('_n') / 8.0 + 1)))
+                      .drop('_n'))
+peek(parts['surge'].orderBy(F.desc('surge')))

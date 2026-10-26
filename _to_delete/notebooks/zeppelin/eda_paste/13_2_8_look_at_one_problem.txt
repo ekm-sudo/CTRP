@@ -1,0 +1,5 @@
+%pyspark
+# Choose a problem in the list to see its first 200 rows (all rows are in the table named below)
+code = z.select('Problem', [(c, c + ': ' + t) for c, t, _, _ in ISSUES], 'E01')
+print('Table: ctrp_eda_' + code.lower())
+z.show(spark.table('ctrp_eda_' + code.lower()).limit(200))

@@ -1,0 +1,7 @@
+%pyspark
+parts['price_features'] = it.groupBy('taxpayer_tin').agg(
+    F.avg('implausible').alias('ctx_implausible_price_rate'),
+    F.avg('low_price').alias('par076_low_price_item_rate'),
+    median('CASE WHEN implausible = 0 THEN price_deviation END').alias('price_deviation_median'),
+    F.avg('on_origin_bench').alias('origin_benchmark_share'))
+peek(parts['price_features'])

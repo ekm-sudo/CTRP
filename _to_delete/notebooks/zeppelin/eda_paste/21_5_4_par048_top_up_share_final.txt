@@ -1,0 +1,5 @@
+%pyspark
+final_tax = F.col('total_original_tax') + F.col('total_top_up')
+parts['par048_top_up_share_final'] = base.select(
+    'taxpayer_tin', F.when(final_tax > 0, F.col('total_top_up') / final_tax).alias('par048_top_up_share_final'))
+peek(parts['par048_top_up_share_final'])

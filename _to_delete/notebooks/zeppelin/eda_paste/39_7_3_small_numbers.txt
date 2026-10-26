@@ -1,0 +1,38 @@
+%pyspark
+def credibility(rate, n, k=10):
+    # Pull a rate towards the average of everyone by weight n / (n + k), and only ever down
+    rate, n = rate.astype(float), n.fillna(0).astype(float)
+    has = rate.notna() & (n > 0)
+    average = (rate[has] * n[has]).sum() / n[has].sum()          # weighted by declarations (or items)
+    w = n / (n + k)
+    return np.minimum(rate, w * rate + (1 - w) * average)
+
+# Track A: the 8 scored features, each with the count it rests on. Five use the 3-year (recency) version.
+TRACK_A = {'top_up_entry_rate': 'entries_24m', 'par077_severe_top_up_rate': 'entries_24m',
+           'par045_amended_entry_rate': 'entries_24m', 'par048_top_up_share_final': 'entries_24m',
+           'par076_shortfall_share': 'items_benchmarked', 'par066_negative_top_up_rate': 'entries_24m',
+           'par105_top_up_180d': 'entries_24m', 'par023_station_spread': 'entries_24m'}
+RECENCY = ['top_up_entry_rate', 'par077_severe_top_up_rate', 'par045_amended_entry_rate',
+           'par066_negative_top_up_rate', 'par048_top_up_share_final']
+
+final = tp[['taxpayer_tin', 'taxpayer_nm', 'entries_24m', 'total_customs_value', 'total_top_up']].copy()
+final.insert(1, 'snapshot_date', SNAPSHOT)
+for col, n in TRACK_A.items():
+    value = tp[col + '_3y'] if col in RECENCY else tp[col]
+    final[col + '_raw'] = value                          # before the small-numbers step (shown in reasons)
+    final[col] = credibility(value, tp[n])               # what the scorecard reads
+
+# Track B: 17 features. The five rates resting on a count get the same small-numbers step.
+TRACK_B = {'par045_amended_entry_rate': 'entries_24m', 'ctx_unpaid_rate': 'entries_24m',
+           'ctx_implausible_price_rate': 'items_benchmarked', 'par076_shortfall_share': 'items_benchmarked',
+           'par076_low_price_item_rate': 'items_benchmarked', 'price_deviation_median': None,
+           'own_price_drop_share': None, 'low_duty_value_share': None, 'duty_gap_share': None,
+           'exemption_apc_value_share': None, 'watchlist_apc_value_share': None, 'ctx_preferential_use_rate': None,
+           'surge': None, 'station_spread': None, 'goods_spread': None, 'same_day_split_excess': None,
+           'newness': None}
+for col, n in TRACK_B.items():
+    final['b_' + col] = credibility(tp[col], tp[n]) if n else tp[col].astype(float)
+
+example = pd.DataFrame({'declarations': tp['entries_24m'], 'amended, raw': final['par045_amended_entry_rate_raw'],
+                        'amended, after the small-numbers step': final['par045_amended_entry_rate']})
+z.show(example.sort_values('declarations').head(10))

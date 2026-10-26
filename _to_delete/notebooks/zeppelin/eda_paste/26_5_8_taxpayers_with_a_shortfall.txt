@@ -1,0 +1,2 @@
+%pyspark
+peek(parts['par076_shortfall_share'].where('par076_shortfall_share > 0'))

@@ -1,0 +1,37 @@
+%pyspark
+priced = (hist_items.where((F.col('customs_value') > 0) & (F.col('net_weight') > 0))
+                    .withColumn('price_kg', F.col('customs_value') / F.col('net_weight'))
+                    .withColumn('price_unit', F.when(F.col('supplementary_qnty') > 0,
+                                                     F.col('customs_value') / F.col('supplementary_qnty'))))
+
+def benchmark(keys, suffix=''):
+    # The median price per kg and per unit, where at least 5 importers bring the goods
+    return (priced.groupBy(*keys)
+                  .agg(median('price_kg').alias('med_kg' + suffix), median('price_unit').alias('med_unit' + suffix),
+                       F.countDistinct('taxpayer_tin').alias('importers'))
+                  .where('importers >= 5').drop('importers'))
+
+on_origin = F.col('med_kg_o').isNotNull()
+it = (priced.join(benchmark(['hsc_cd']), 'hsc_cd')                                   # an HS benchmark is needed
+            .join(benchmark(['hsc_cd', 'gds_org_cty'], '_o'), ['hsc_cd', 'gds_org_cty'], 'left')
+            .withColumn('bm_kg', F.when(on_origin, F.col('med_kg_o')).otherwise(F.col('med_kg')))
+            .withColumn('bm_unit', F.when(on_origin, F.col('med_unit_o')).otherwise(F.col('med_unit')))
+            .withColumn('on_origin_bench', on_origin.cast('int')))
+
+price_kg, bm_kg, bm_unit, units = F.col('price_kg'), F.col('bm_kg'), F.col('bm_unit'), F.col('supplementary_qnty')
+low_per_unit_too = bm_unit.isNull() | units.isNull() | (units <= 0) | (F.col('customs_value') / units < 0.5 * bm_unit)
+gap_per_kg = bm_kg * F.col('net_weight') - F.col('customs_value')
+gap_per_unit = F.when((units > 0) & bm_unit.isNotNull(), bm_unit * units - F.col('customs_value'))
+it = (it.withColumn('implausible', F.when(price_kg < 0.01 * bm_kg, 1).otherwise(0))
+        .withColumn('low_price', F.when((price_kg < 0.5 * bm_kg) & (price_kg >= 0.01 * bm_kg) & low_per_unit_too, 1)
+                                  .otherwise(0))
+        .withColumn('shortfall', F.least(gap_per_kg, gap_per_unit))                  # the smaller one
+        .withColumn('price_deviation', F.abs(F.log(price_kg / bm_kg)))
+        .cache())
+
+counted_shortfall = F.when((F.col('low_price') == 1) & (F.col('shortfall') > 0), F.col('shortfall')).otherwise(0)
+parts['par076_shortfall_share'] = it.groupBy('taxpayer_tin').agg(
+    F.count('*').alias('items_benchmarked'),
+    (F.sum(counted_shortfall) / F.sum('customs_value')).alias('par076_shortfall_share'))
+peek(it.select('taxpayer_tin', 'hsc_cd', 'gds_org_cty', 'customs_value', 'net_weight', 'price_kg', 'bm_kg',
+               'implausible', 'low_price', 'shortfall'))

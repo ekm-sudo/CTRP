@@ -1,0 +1,26 @@
+%pyspark
+final['limited_history'] = np.where(final['decl_24m_count'] < 10, 'Y', 'N')
+final['no_top_up_history'] = np.where(final['top_up_24m_ugx'].fillna(0) <= 0, 'Y', 'N')
+
+if WITH_OUTCOMES:
+    after = decl.where(F.col('dt') > SNAP)
+    checked = (F.col('red') == 1) | (F.col('yellow') == 1)
+    outcomes = after.groupBy('taxpayer_tin').agg(
+        F.count('*').alias('out_entries'),
+        F.sum(F.when(checked, 1).otherwise(0)).alias('out_checked'),
+        F.sum(F.when(checked & (F.col('topped_up') == 1), 1).otherwise(0)).alias('out_checked_hits'),
+        F.sum('topped_up').alias('out_topped_up_entries'),
+        F.sum('top_up').alias('out_top_up'),
+        F.sum('orig_tax').alias('out_original_tax')).toPandas()
+    final = final.merge(outcomes, on='taxpayer_tin', how='left')
+    out_cols = [c for c in final if c.startswith('out_')]
+    final[out_cols] = final[out_cols].fillna(0)
+
+first = ['taxpayer_tin', 'taxpayer_nm', 'snapshot_date', 'decl_24m_count', 'customs_value_24m_ugx', 'limited_history',
+         'no_top_up_history', 'peer_group']
+track_a = list(TRACK_A) + ['raw_' + c for c in TRACK_A]
+track_b = ['b_' + c for c in TRACK_B] + [percentile_name(c) for c in TRACK_B]
+final_dataset = final[first + track_a + track_b + [c for c in final if c.startswith('out_')]]
+save(final_dataset, 'ctrp_final_dataset')
+print('{:,} taxpayers x {} columns, saved as ctrp_final_dataset'.format(*final_dataset.shape))
+peek(final_dataset)

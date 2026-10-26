@@ -1,0 +1,18 @@
+%pyspark
+# ---------- 1. Settings ------------------------------------------------------------------
+# Your home folder on the cluster is found automatically. Results are written to <home>/ctrp when
+# it exists; otherwise they stay in this Spark session only. Set SAVE_TO_FOLDER = False to never write.
+_fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
+HOME = _fs.getHomeDirectory().toString()
+OUT_DIR = HOME + '/ctrp'
+SAVE_TO_FOLDER = bool(_fs.exists(_fs.getHomeDirectory()))
+SNAPSHOTS = [('2017-09-30', False), ('2018-03-31', False), ('2018-09-30', False), ('2019-03-31', False), ('2019-09-30', False), ('2020-03-31', False), ('2020-09-30', False), ('2021-03-31', False), ('2021-09-30', False), ('2022-03-31', False), ('2022-09-30', False), ('2023-03-31', False), ('2023-09-30', False), ('2024-03-31', False), ('2024-09-30', False), ('2025-03-31', False), ('2025-09-30', False), ('2026-03-31', False), ('2026-09-30', True)]               # (date, live?) pairs
+TEST_SNAPSHOT = ('2026-03-31', False)   # paragraph 4 runs only this one
+HISTORY_MONTHS = 24               # months of history before each snapshot
+YEARS_MONTHS = 36                # the y1/y2/y3 yearly counts reach back this far
+OUTCOME_MONTHS = 6                # months of outcomes after a back-test snapshot
+PRIOR_MONTHS = 36                # look-back that decides "new trader" in the main extract
+PREF_ORIGINS = ['UG', 'KE', 'TZ', 'RW', 'BI', 'SS', 'CD', 'SO', 'KM', 'DJ', 'EG', 'ER', 'SZ', 'ET', 'LY', 'MG', 'MW', 'MU', 'SC', 'SD', 'TN', 'ZM', 'ZW']                 # preference partner states (to be confirmed by the officers)
+RUN_TRACK_B = True                      # also write the Track B behaviour features
+VIEW = 'dm_modeled_ura_datascience.vw_cstm_AEO_model'
+print('settings loaded;', ('output goes to ' + OUT_DIR) if SAVE_TO_FOLDER else 'results kept in memory only, nothing is written')

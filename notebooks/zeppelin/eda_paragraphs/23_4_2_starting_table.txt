@@ -1,0 +1,11 @@
+%pyspark
+base = (hist.groupBy('taxpayer_tin')
+            .agg(F.max(F.struct('dt', 'taxpayer_nm')).getField('taxpayer_nm').alias('taxpayer_nm'),  # latest name
+                 F.count('*').alias('decl_24m_count'),                     # declarations in 24 months
+                 F.sum('value').alias('customs_value_24m_ugx'),
+                 F.sum('orig_tax').alias('original_tax_24m_ugx'),
+                 F.sum('top_up').alias('top_up_24m_ugx'))
+            .cache())
+parts = {}
+print('Taxpayers: {:,}'.format(base.count()))
+peek(base)

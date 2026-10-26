@@ -1,0 +1,2 @@
+%pyspark
+peek(parts['peer_price_shortfall_per_value_24m_rate'].where('peer_price_shortfall_per_value_24m_rate > 0'))

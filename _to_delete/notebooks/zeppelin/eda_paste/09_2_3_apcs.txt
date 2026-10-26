@@ -1,0 +1,2 @@
+%pyspark
+z.show(top10(F.col('cpc_cd'), 'apc'))

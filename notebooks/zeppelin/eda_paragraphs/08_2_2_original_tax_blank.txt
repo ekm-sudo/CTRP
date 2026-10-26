@@ -1,0 +1,9 @@
+%pyspark
+# Test of "blank original tax means unchanged" (E08): if it is true, declarations WITH a top-up should almost
+# never have a blank original tax, because a top-up changes the tax
+per_declaration = eda.groupBy('instance_id').agg(F.max('top_up_flg').alias('flag'),
+                                                 F.max('original_tax_amt').alias('original_tax'))
+z.show(per_declaration
+       .groupBy(F.coalesce(F.col('flag'), F.lit('blank')).alias('top-up flag'))
+       .agg(F.count('*').alias('declarations'),
+            F.round(100 * F.avg(F.col('original_tax').isNull().cast('double')), 1).alias('original tax blank %')))

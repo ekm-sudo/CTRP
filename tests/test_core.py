@@ -71,3 +71,20 @@ def test_backtest_returns_lift_for_model_and_baseline(extract):
     lt, bands, base = M.backtest(r, extract)
     assert set(lt['ranked_by']) == {'Model', 'Past top-ups only'}
     assert lt['hit_lift'].notna().all()
+
+
+def test_recency_weights_rebuild_rates_from_yearly_counts():
+    import pandas as pd
+    from ctrp import core as M
+    d = pd.DataFrame({'top_up_entry_rate': [0.5], 'par077_severe_top_up_rate': [0.0], 'par045_amended_entry_rate': [0.0],
+                      'par066_negative_top_up_rate': [0.0], 'total_top_up': [1.0], 'total_original_tax': [10.0],
+                      'par048_top_up_ratio': [0.1]})
+    for k, (n, t) in zip((1, 2, 3), [(10, 0), (10, 10), (10, 10)]):
+        d[f'y{k}_entries'], d[f'y{k}_topped_up'] = n, t
+        for c in ['severe', 'amended', 'tax_reduced', 'top_up_ugx']:
+            d[f'y{k}_{c}'] = 0
+        d[f'y{k}_original_tax_ugx'] = 10.0
+    out = M.apply_recency(d)
+    assert abs(out['top_up_entry_rate'][0] - (0.5 * 10 + 0.25 * 10) / (17.5)) < 1e-12   # recent clean year counts most
+    assert bool(out['recency_applied'][0])
+    assert not M.apply_recency(d.drop(columns=['y3_entries']))['recency_applied'].any()   # no counts: 24-month rates kept

@@ -1,0 +1,4 @@
+%pyspark
+parts['tax_reduced_per_decl_24m_rate'] = (hist.groupBy('taxpayer_tin')
+                                           .agg(F.avg('negative_top_up').alias('tax_reduced_per_decl_24m_rate')))
+peek(parts['tax_reduced_per_decl_24m_rate'])

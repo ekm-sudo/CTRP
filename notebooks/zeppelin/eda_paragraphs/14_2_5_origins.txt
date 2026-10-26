@@ -1,0 +1,2 @@
+%pyspark
+z.show(top10(F.col('gds_org_cty'), 'origin'))

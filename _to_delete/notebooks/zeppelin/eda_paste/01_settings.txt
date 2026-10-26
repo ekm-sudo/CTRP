@@ -1,0 +1,19 @@
+%pyspark
+# ===================== Settings: the only paragraph to edit =====================
+SNAPSHOT = '2026-09-30'          # the day the risk profile is made (the last day of a month)
+WITH_OUTCOMES = False              # True for a past snapshot: adds what happened in the 6 months after it
+SAMPLE_1_IN = None                 # e.g. 20 = a quick trial on 1 in 20 taxpayers. None = every taxpayer
+
+# The agreed cleaning rules that can be switched (all on)
+EXCLUDE_APC_483 = True              # R13 APC 483: destroyed or abandoned goods, dummy entries
+LATEST_DECLARATION_PER_ENTRY = True    # R14 one declaration per entry (entry number + station + year)
+EXCLUDE_MOTOR_VEHICLES = True          # R15 motor vehicles have their own model
+MOTOR_VEHICLE_HEADINGS = ['8701', '8702', '8703', '8704', '8705', '8706', '8707', '8708', '8711']
+
+# Where results go. Every result is always kept as a table in this session.
+SAVE_TO_FOLDER = False             # True: also write CSV files under OUT_DIR (needs a folder you can write to)
+OUT_DIR = '/user/CHANGE_ME/ctrp_eda'
+SAVE_TO_SCHEMA = None              # e.g. 'my_sandbox': also save as Hive tables (download from Hue as Excel)
+PRODUCTION_TABLE = None            # optional, for Part 8.2: a table holding the production extract for SNAPSHOT
+
+VIEW = 'dm_modeled_ura_datascience.vw_cstm_AEO_model'

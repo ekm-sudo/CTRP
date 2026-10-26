@@ -23,7 +23,7 @@ TEMPLATE = HERE / 'ura_template.docx'
 LOGO = HERE / 'ura_logo.png'
 CHARTS = ROOT / 'results' / 'charts'
 OUT = ROOT / 'docs' / 'CTRP_Model_Guide.docx'
-VERSION = '0.2'
+VERSION = '0.3'
 DATE = 'October 2026'
 
 
@@ -42,11 +42,15 @@ d.table('Document Information', ['Field', 'Details'], [
     ['Version', f'{VERSION} (draft)'],
     ['Classification', 'Confidential'],
     ['Owner', 'Data Science Section, Data, Innovations and Projects Division, ITID'],
-    ['Describes', 'Model version 1.0.0-dev4 and the ctrp project (src layout, run with main.py)'],
+    ['Describes', 'Model version 1.0.0-dev5 and the ctrp project (src layout, run with main.py)'],
 ], [4, 13])
 d.table('Document Version History', ['Version', 'Date', 'Author(s)', 'Role', 'Changes'], [
     ['0.1', DATE, 'Ethan Mugire', 'Officer, Data Science', 'First version, written alongside release 1.'],
     ['0.2', DATE, 'Ethan Mugire', 'Officer, Data Science', 'Lift explained step by step; ensembles; new project layout and commands.'],
+    ['0.3', DATE, 'Ethan Mugire', 'Officer, Data Science', 'Workbook wording (History and Overall Risk Band, minimum risk level); '
+     'performance measured per check, with precision and recall at the lines officers use (4.6, 4.7); nine years of '
+     'validation from the long run (4.8); three years of history with recent years counting more (4.9); the two-track '
+     'design and Track B (Part 10); new commands (7.9, 7.10); new questions (Part 9).'],
 ], [1.5, 2.5, 3, 3, 7])
 d.h2('Distribution')
 d.p('This guide is for anyone who has to run, present, defend or change the Customs Taxpayer Risk Profiling '
@@ -56,6 +60,7 @@ d.table('Audience', ['Audience', 'How to use this guide'], [
     ['Data Science officers', 'Read it front to back once. Then use Parts 7 and 8 as the manual for running and changing the model.'],
     ['Risk Officers and reviewers', 'Parts 1, 3, 4 and 9 explain what a score means and why it can be trusted.'],
     ['New contributors', 'Part 8 shows where everything lives in the code and the safe way to change it.'],
+    ['Anyone presenting the work', 'Part 4 (especially 4.6 to 4.9) and Part 10 hold the current evidence; Part 9 the likely questions.'],
 ], [5, 12])
 d.contents()
 d.page_break()
@@ -78,18 +83,20 @@ d.h2('1.1 The Problem in One Paragraph')
 d.p('Customs cannot look closely at every importer. More than 58,000 taxpayers lodge about 1.2 million import '
     'declarations every two years. Officers need to know where to look first. Some importers have a long record '
     'of declarations that were later corrected upward (top-ups); some have a clean record; most have declared so '
-    'little that nobody can tell yet. The model reads each taxpayer\'s last 24 months and puts them in order, '
-    'riskiest first, with the reasons written out.')
+    'little that nobody can tell yet. The model reads each taxpayer\'s history (the last 3 years, recent years '
+    'counting most) and puts them in order, riskiest first, with the reasons written out. A second view, Track B '
+    '(Part 10), looks at how each taxpayer trades to find risk that has not yet shown up in their record.')
 d.note('In plain words', 'Think of a school with 58,000 students and a few teachers. The teachers cannot sit with '
        'every student, so they want a list: who most needs attention, and why. The model makes that list from '
        'each student\'s past marks, the same way for everyone.')
 d.h2('1.2 What an Officer Receives')
 d.p('For every taxpayer, the Excel workbook gives one row like this (a made-up taxpayer, worked through in full in Part 3):')
 d.table('One Row of the Scores Sheet (made-up example)', ['Column', 'Value'], [
-    ['Score', '26 (out of 100)'], ['Band', 'LOW'],
-    ['Reason 1', 'PAR_045T: 15% of declarations needed a top-up (concern from 3%, maximum at 40%)'],
-    ['Reason 2', 'PAR_077: 8% of declarations had a top-up of 30% or more of the final tax (concern from 2%, maximum at 20%)'],
-    ['Reason 3', 'PAR_045: 25% of declarations were amended (concern from 10%, maximum at 50%)'],
+    ['History Risk Score', '26 (out of 100)'], ['History Risk Band', 'LOW'],
+    ['Overall Risk Band', 'LOW (the higher of the History Risk Band and the Risky Behaviour Flag, Part 10)'],
+    ['Reason 1', 'PAR_045T: 15% of declarations needed a top-up (minimum risk level 3%, maximum at 40%)'],
+    ['Reason 2', 'PAR_077: 8% of declarations had a top-up of 30% or more of the final tax (minimum risk level 2%, maximum at 20%)'],
+    ['Reason 3', 'PAR_045: 25% of declarations were amended (minimum risk level 10%, maximum at 50%)'],
     ['Notes', '(none: 40 declarations is enough history, the pattern is not unusual)'],
     ['Peer group', 'Textiles, medium'],
 ], [4, 13])
@@ -111,12 +118,15 @@ d.table('Key Words', ['Word', 'Meaning', 'Example'], [
     ['Hit', 'A red or yellow declaration that ended in a top-up', 'Checked and found short'],
     ['Hit rate', 'Hits divided by checked declarations', '70 hits in 1,000 checks = 7%'],
     ['Snapshot', 'The date we score taxpayers "as at"', '31 March 2026'],
-    ['History window', 'The 24 months before the snapshot: where features come from', 'Apr 2024 to Mar 2026'],
+    ['History window', 'The 24 months before the snapshot: where features come from; the top-up and amendment '
+     'rates reach back 3 years, recent years counting most (4.9)', 'Apr 2024 to Mar 2026'],
     ['Outcome window', 'The 6 months after the snapshot: what actually happened next', 'Apr 2026 to Sep 2026'],
     ['Feature', 'A number computed per taxpayer from their history', 'Share of declarations topped up'],
     ['Parameter', 'A feature the officers agreed to score, with a code', 'PAR_045T'],
     ['Back-test', 'Score taxpayers at a past date, then check what happened next', 'Score at Mar 2026, check Apr to Sep 2026'],
     ['Lift', 'Hit rate of the model\'s top group divided by everyone\'s hit rate', 'Top 5% hit 31.5%, everyone 7%: lift 4.5'],
+    ['AUC per check', 'The main measure (4.6): pick one check that found a top-up and one that did not; how often does the model rank the first higher? 0.5 is chance', '0.80'],
+    ['Precision, recall', 'At a line officers draw: share of checks above it that found something; share of all hits above it', 'HIGH and above: 39%, 52%'],
     ['Baseline', 'The simplest sensible rule, used as the bar to beat', 'Rank on past top-up ratio alone'],
 ], [3, 8, 6])
 
@@ -219,11 +229,11 @@ d.note('Why only lower, never raise?', ['If the blend could raise a rate, a smal
        'compute points.'])
 d.figure(chart(11), 'Amendment rate by number of declarations: rates on few declarations are noise')
 d.h2('3.4 Step 3: Put Each Measure on a 0 to 1 Ruler')
-d.p('Each parameter has two officer-style thresholds: a **concern level** (below it, 0) and a **maximum** (at or '
+d.p('Each parameter has two officer-style thresholds: a **minimum risk level** (below it, 0) and a **maximum** (at or '
     'above it, 1). In between is a straight line.')
-d.code(['scaled = (value - concern) / (maximum - concern), held between 0 and 1',
+d.code(['scaled = (value - minimum) / (maximum - minimum), held between 0 and 1',
         'PAR_045T: (13.3% - 3%) / (40% - 3%) = 0.278'])
-d.figure(chart(13), 'Each parameter for regular taxpayers, with its concern level (dotted) and maximum (dashed)')
+d.figure(chart(13), 'Each parameter for regular taxpayers, with its minimum risk level (dotted) and maximum (dashed)')
 d.h2('3.5 Step 4: Weigh the Measures')
 d.p('Each parameter has a likelihood (L) and an impact (I) rating from 1 to 5. Its weight is its L x I divided by '
     'the total of all L x I, times 100, so all weights add up to 100 points.')
@@ -352,13 +362,78 @@ d.bullets([
     'post-clearance audit results.',
     '**The outcome is narrow.** It only sees top-ups on checked declarations. Risk that is never checked, or never '
     'found, cannot show up as a hit.',
-    '**The base rate fell.** The hit rate dropped from about 12% to about 7% after March 2024. We judge each snapshot '
-    'against its own rate, so this does not distort the comparison, but the cause is still unknown.',
+    '**The base rate fell.** The hit rate of all checks dropped from 11-13% to about 7% after March 2024 (4.8 shows '
+    'nine years). We judge each snapshot against its own rate, so this does not distort the comparison, but the '
+    'cause is a question for the Risk Officers.',
     '**Flags are as they stand today**, not as they stood on the snapshot date. A top-up raised just after the '
     'snapshot on a declaration lodged just before it counts in the history. The effect is limited to a few weeks.',
     '**The six snapshots overlap** (each history window shares 18 months with the next), so they are not six fully '
     'independent tests. Consistency across them is still the best evidence we have.',
 ])
+
+d.h2('4.6 Measuring Per Check, Not Per Taxpayer')
+d.p('There are three ways to score a ranking against what happened next. We use the first as the main measure and '
+    'the third beside it (decisions 84 and 88).')
+d.table('Three Ways to Measure', ['Way', 'Question it answers', 'Verdict'], [
+    ['A. Per check', 'Of all red and yellow checks, does the model rank the ones that found a top-up above the ones that did not?',
+     'Main measure. Fair to big and small traders; matches how officers judge selectivity (accuracy of checks)'],
+    ['B. Per taxpayer, yes or no', 'Did the taxpayer get at least one top-up?',
+     'Dropped. A trader checked 50 times almost surely gets one; a trader checked twice rarely does. It measures how often customs looked'],
+    ['C. Money', 'What share of all top-up money came from taxpayers above the line?',
+     'Shown beside A. Matches "additional revenue" in the officers\' own list; a few big cases can swing it'],
+], [3.5, 7, 6.5])
+d.note('Why not accuracy?', 'Only about 7% of checks find a top-up, so a model that says "nothing found" for '
+       'everything is right about 93% of the time and useless. Accuracy rewards being right about the easy majority.')
+d.h2('4.7 Precision and Recall Need a Line')
+d.p('Precision and recall only mean something once a line is drawn: these taxpayers get checked, the rest do not. '
+    'With every taxpayer above the line, recall is 100% and precision is just the average hit rate, which says '
+    'nothing about the model. AUC is the measure over all taxpayers; precision and recall are read at the lines '
+    'officers might use. Averages over the six full snapshots:')
+d.table('Precision and Recall at Different Lines (average of 6 snapshots)',
+        ['Line', 'Taxpayers above it', 'Precision (hits per check)', 'Recall (share of all hits)', 'Share of top-up money'], [
+    ['Top 1%', '1%', '41%', '15%', '26%'], ['Top 5%', '5%', '40%', '42%', '47%'], ['Top 10%', '10%', '36%', '54%', '59%'],
+    ['VERY HIGH', '2%', '41%', '22%', '34%'], ['HIGH and above', '8%', '39%', '52%', '55%'], ['All taxpayers', '100%', '9%', '100%', '100%'],
+], [3.2, 3, 3.6, 3.6, 3.6])
+d.p('The line to quote is **HIGH and above**, because the bands are what officers act on: the riskiest 8% of '
+    'taxpayers carry about half of all hits and half of the top-up money, and checks on them find something about '
+    'four times as often as average. This is not news to officers, who already target repeat offenders. Its value is '
+    'that the bands mean what they say, that every taxpayer is scored the same way with reasons, and that the other '
+    'half of the risk sits below HIGH, where history cannot see it: the reason for Track B (Part 10).')
+d.h2('4.8 Nine Years of Evidence')
+d.p('A one-pass query (the long run, 7.9) gives every taxpayer\'s counts for every half-year since October 2014. '
+    'From it, Track A was scored at 18 dates, every six months from September 2017 to March 2026, each judged on the '
+    'six months that followed. Checked first against the six dates also pulled in full: the same taxpayers, and '
+    '99.5% to 100% of taxpayers matching on every measure. The long run cannot give the price benchmark (PAR_076) or '
+    'station spread (PAR_023), so it scores on six parameters carrying 92% of the weight; on the six full dates this '
+    'keeps 95% to 97% of the same top 5%.')
+d.figure(str(CHARTS / 'nine_years.png'), 'Nine years of validation: AUC per check (top) and the hit rate of all checks (bottom), Sep 2017 to Mar 2026')
+d.bullets([
+    '**Steady over the long run.** AUC per check between 0.77 and 0.86, at 0.80 or above on most dates, through '
+    'pre-COVID, COVID and recovery years.',
+    '**One clear dip in nine years**, from September 2024 to September 2025 (low point 0.74 in March 2025), recovering to 0.80.',
+    '**The dip follows a change in customs, not in the model.** The hit rate of all checks fell from 11-13% to 7% '
+    'after March 2024: checks in general started finding less. The question "what changed in March 2024?" is for '
+    'the Risk Officers.',
+])
+d.h2('4.9 How Many Years of History, and Why Recent Years Count More')
+d.p('The rates behind the three main parameters used to treat the last 24 months equally. Officers look further '
+    'back but give recent behaviour more weight, so we tested ways of doing the same (decisions 92 to 94).')
+d.table('Weighting the Years of History (18 dates; 14 for five years)', ['Option', 'AUC per check', 'Better than the old rule on'], [
+    ['Old rule: last 2 years, equal', '0.813', 'reference'],
+    ['Last year only', '0.804', '0 of 18 (worse on 16)'],
+    ['3 years, equal (1, 1, 1)', '0.816', '14 of 18'],
+    ['3 years, gentle (1, 0.75, 0.5)', '0.817', '16 of 18'],
+    ['**3 years, halving (1, 0.5, 0.25): adopted**', '0.817', '**18 of 18**'],
+    ['3 years, steep (1, 0.33, 0.11)', '0.816', '14 of 18'],
+    ['5 years, halving (14 dates)', '0.821 (3 years: 0.820 on the same dates)', '14 of 14'],
+], [7, 5, 5])
+d.p('**Why halving.** Each year back counts half as much as the year after it. It is the only option better than '
+    'the old rule on every date. Equal or gentle weights let a top-up from three years ago count almost as much as '
+    'last year\'s, which flags fewer taxpayers and less accurately; steeper weights forget too quickly. Halving keeps '
+    'old mistakes visible while letting a trader who has cleaned up recover within about two years. Five years adds '
+    'nothing measurable over three and needs heavier queries, so the model uses three.')
+d.note('In plain words', 'A rate is now: (last year\'s top-ups + half of the year before + a quarter of the year '
+       'before that) divided by the same mix of declarations. Last year speaks loudest; three years ago still has a say.')
 
 # ================================================================================ PART 5
 d.part('PART 5: WHAT WE TRIED, WHAT WE DROPPED, AND WHY',
@@ -368,7 +443,7 @@ d.h2('5.1 The Maximum for PAR_045T: 40%, Not 10%')
 d.p('The officers\' rule says a taxpayer with more than 10% of declarations topped up is as bad as it gets. With 10% '
     'as the maximum, 35% of regular traders scored full points: they were all tied at the top, and the scale could '
     'no longer tell a 12% taxpayer from a 60% one. Ranked on this parameter alone, lift fell to 2.6; with a 40% maximum it was 5.3.')
-d.note('Defend it in one sentence', 'We kept the officers\' concern level of 3%, and moved the maximum to 40% because '
+d.note('Defend it in one sentence', 'We kept the officers\' minimum risk level of 3%, and moved the maximum to 40% because '
        'a test that a third of the class passes with full marks cannot rank the class.')
 d.h2('5.2 PAR_048 Measured Over Final Tax')
 d.p('Top-ups divided by ORIGINAL tax explodes when the original tax is tiny: one taxpayer declared UGX 29 of tax and '
@@ -434,18 +509,19 @@ d.p('Fair play rules: models that learn from outcomes only train on earlier snap
     'latest snapshots; "better" is only claimed when a bootstrap test (re-running the comparison on 300 resampled '
     'populations) says the difference is bigger than chance.')
 d.h2('6.3 Results')
-d.table('Challenger Results (average of 4 test snapshots)', ['Model', 'Lift top 5%', 'Hits in top 5%', 'Revenue in top 5%', 'Small traders in top 5%'], [
-    ['Scorecard (release 1)', '4.37', '5,522', '45%', '53%'],
-    ['Monotone boosting (same 8 inputs)', '4.75', '5,809', '43%', '53%'],
-    ['Learned weights', '5.00', '5,070', '38%', '59%'],
-    ['Monotone boosting with size', '6.30', '3,508', '19%', '83%'],
-    ['Data-estimated shrinkage', '3.97', '2,238', '35%', '78%'],
-    ['Peer percentile', '3.48', '4,228', '45%', '53%'],
-    ['Ensemble IF + PCA', '2.13', '6,678', '50%', '42%'],
-    ['K-Means distance', '2.49', '6,424', '45%', '37%'],
-    ['Gaussian mixture', '1.20', '8,414', '57%', '28%'],
-    ['Baseline', '2.58', '807', '13%', '94%'],
-], [5.5, 2.6, 2.8, 3, 3.1])
+d.table('Challenger Results (average of 4 test snapshots)', ['Model', 'Lift top 5%', 'Checks in top 5%', 'Hits in top 5%', 'Revenue in top 5%', 'Revenue per check (UGX M)'], [
+    ['Scorecard (release 1)', '4.37', '17,349', '5,522', '45%', '1.18'],
+    ['Monotone boosting (same 8 inputs)', '4.75', '16,916', '5,809', '43%', '1.16'],
+    ['Learned weights', '5.00', '13,809', '5,070', '38%', '1.27'],
+    ['Monotone boosting with size', '6.30', '7,230', '3,508', '19%', '1.41'],
+    ['Data-estimated shrinkage', '3.97', '7,645', '2,238', '35%', '1.93'],
+    ['Peer percentile', '3.48', '16,901', '4,228', '45%', '1.16'],
+    ['Ensemble IF + PCA', '2.13', '44,668', '6,678', '50%', '0.51'],
+    ['K-Means distance', '2.49', '36,635', '6,424', '45%', '0.59'],
+    ['Gaussian mixture', '1.20', '97,543', '8,414', '57%', '0.25'],
+    ['Baseline', '2.58', '4,809', '807', '13%', '1.39'],
+    ['Largest importers by value (reference)', '0.52', '134,580', '5,099', '53%', '0.17'],
+], [5.2, 2.0, 2.6, 2.4, 2.4, 2.6])
 d.figure(chart(34), 'Challengers and blends against the scorecard (dotted line)')
 d.h2('6.4 What It Means')
 d.bullets([
@@ -454,37 +530,61 @@ d.bullets([
     'to test further in round 2.',
     '**The warning case** shows why lift alone misleads: boosting with size has the highest lift, but it filled the top '
     'with one-off importers and caught fewer hits and much less revenue.',
-    '**The anomaly and clustering models lose on lift** but catch MORE revenue, because they pick big, high-volume '
-    'traders. That is a different goal. Which goal the list should serve is a question for the Risk Officers (efficiency '
-    'per check, or volume caught).',
+    '**The anomaly and clustering models lose on lift, and their bigger revenue share is an illusion of size** '
+    '(section 6.5): they put big importers at the top, whose top 5% takes far more checks, each finding much less money.',
     '**The learned weights** suggest that once the share topped up is known, amendments add little for this outcome. '
     'That is evidence for the ratings session, not an automatic change, because learned weights inherit selection bias.',
 ])
 d.figure(chart(36), 'Weights chosen by officers (L x I) against weights learned from outcomes')
-d.h2('6.5 Ensembles: Combining Models')
+d.h2('6.5 What "Revenue Caught" Means, and Why It Can Mislead')
+d.p('Read this before quoting any revenue figure from the comparison.')
+d.numbered([
+    '**Where the money figure comes from.** For each taxpayer, the extract records the top-up money (final tax minus '
+    'original tax) customs actually raised on their declarations in the 6 months after the snapshot. The model does '
+    'not create or predict this money. It is what the existing checks found.',
+    '**What "revenue in the top 5%" is.** Add up that money for the taxpayers a model puts in its top 5%, and divide by '
+    'the total for everyone. In the 6 months after March 2026 the total was UGX 28.2 billion.',
+    '**Why it follows size.** A big importer with hundreds of declarations is checked thousands of times, so even a low '
+    'hit rate adds up to a lot of money. Put big importers at the top and the revenue share rises, whether or not the '
+    'model knows anything about risk.',
+    '**The proof.** Rank taxpayers on customs value alone, with no risk information at all: the top 5% hold 53% of the '
+    'top-up revenue, yet their hit rate is half the average (lift 0.52). Revenue share alone would call that a good model.',
+    '**The fair measure is revenue per check**: money found divided by the checks it took. That is what an officer\'s '
+    'time actually buys. The scorecard\'s top 5% finds UGX 1.18 million per check; the Gaussian mixture\'s finds UGX 0.25 '
+    'million, because its top 5% needs 97,543 checks (more than half of all checks) to reach its 57%.',
+])
+d.table('Revenue in the Top 5%, 31 March 2026 Snapshot', ['Ranking', 'Checks', 'Hits', 'Hit rate', 'Top-up revenue (UGX bn)', 'Share', 'Per check (UGX M)'], [
+    ['Scorecard', '19,134', '7,162', '37.4%', '12.0', '43%', '0.63'],
+    ['Ensemble IF + PCA', '49,669', '7,832', '15.8%', '14.9', '53%', '0.30'],
+    ['Gaussian mixture', '91,051', '9,177', '10.1%', '16.7', '59%', '0.18'],
+    ['Largest importers by value', '125,743', '4,178', '3.3%', '16.0', '57%', '0.13'],
+], [4.2, 2.3, 1.8, 1.8, 2.8, 1.6, 2.5])
+d.note('Defend it in one sentence', 'The unsupervised models reach more top-up money only by sending officers to '
+       'check the biggest importers far more often; per check, the scorecard finds two to five times as much.')
+d.h2('6.6 Ensembles: Combining Models')
 d.p('An ensemble combines several models instead of picking one. The simplest kind, used here, is a **blend**: each '
     'taxpayer gets the average of their rank positions in the member models. A taxpayer stays at the top only if '
     'several models agree. The idea is that models making different mistakes cover for each other: the Scope and '
     'Design candidates find big, high-volume traders, the scorecard finds frequent top-ups. A **stacked blend** goes '
     'one step further and learns from earlier snapshots how much each member should count.')
-d.table('Blends Against the Scorecard (average of 4 test snapshots)', ['Model', 'Lift top 5%', 'Hits in top 5%', 'Revenue in top 5%', 'vs scorecard'], [
-    ['Scorecard (release 1)', '4.37', '5,522', '45%', ''],
-    ['Blend: all models', '4.57', '6,119', '46%', '2 better, 0 worse'],
-    ['Blend: scorecard + boosting + learned weights', '4.80', '5,393', '42%', '3 better, 0 worse'],
-    ['Blend: scorecard + Scope and Design candidates', '3.90', '6,680', '49%', '0 better, 2 worse'],
-    ['Blend: scorecard + Gaussian mixture', '3.92', '6,673', '49%', '0 better, 2 worse'],
-    ['Stacked blend (3 tests)', '3.95', '2,919', '21%', '1 better, 1 worse'],
-], [6.5, 2.4, 2.6, 2.8, 2.7])
+d.table('Blends Against the Scorecard (average of 4 test snapshots)', ['Model', 'Lift top 5%', 'Hits in top 5%', 'Revenue in top 5%', 'Per check (UGX M)', 'vs scorecard'], [
+    ['Scorecard (release 1)', '4.37', '5,522', '45%', '1.18', ''],
+    ['Blend: all models', '4.57', '6,119', '46%', '1.11', '2 better, 0 worse'],
+    ['Blend: scorecard + boosting + learned weights', '4.80', '5,393', '42%', '1.25', '3 better, 0 worse'],
+    ['Blend: scorecard + Scope and Design candidates', '3.90', '6,680', '49%', '0.93', '0 better, 2 worse'],
+    ['Blend: scorecard + Gaussian mixture', '3.92', '6,673', '49%', '0.95', '0 better, 2 worse'],
+    ['Stacked blend (3 tests)', '3.95', '2,919', '21%', '1.05', '1 better, 1 worse'],
+], [6.0, 2.0, 2.2, 2.4, 2.2, 2.4])
 d.bullets([
-    '**The blend of all models is the only model that improves all three measures together**: a little more lift, '
-    '11% more hits and one more point of revenue, better in 2 of 4 tests and worse in none. Everyone in its top 5% '
+    '**The blend of all models is the best all-round result**: a little more lift, 11% more hits and one more point of '
+    'revenue share with about the same revenue per check, better in 2 of 4 tests and worse in none. Everyone in its top 5% '
     'also has 15 or more scorecard points, so the scorecard\'s reasons still explain them. It is the leading round 2 '
     'challenger (decision 52).',
     '**Why not adopt it now?** The gain is real but small and significant in only half the tests; the ranking would '
     'no longer follow the points officers see (a taxpayer with 55 points could rank above one with 60); and eight '
     'models would have to run and be maintained in production. A shadow run and a blind officer review come first.',
-    '**Blends with the Scope and Design candidates** catch more hits and revenue but have lower lift: they trade '
-    'efficiency for volume (decision 54). Which one URA wants is the open question OQ-1.',
+    '**Blends with the Scope and Design candidates** catch more hits and revenue share only by pulling in bigger '
+    'traders with many more checks: lift and revenue per check both fall (decisions 54 and 56).',
     '**The stacked blend** is unstable with only three earlier windows to learn from (decision 53).',
 ])
 
@@ -540,6 +640,8 @@ d.p('Run it after the notebook has saved the charts. Open the .docx in Word and 
 d.h2('7.8 When Something Goes Wrong')
 d.table('Common Problems', ['Message', 'Cause and fix'], [
     ['ModuleNotFoundError: No module named ...', 'A library is missing: run `python -m pip install -r requirements.txt`.'],
+    ['pip: Read timed out, or Tunnel connection failed: 503', 'pip cannot reach the internet through the URA proxy. Try again later, or add `--proxy http://<proxy address>:<port>` (ask IT for the address), or install one library at a time with a longer wait: `python -m pip install pytest --timeout 120`.'],
+    ['No module named pytest', 'Only the tests need it: `python -m pip install pytest`. Scoring, the notebook and the documents run without it.'],
     ['ModuleNotFoundError: No module named ctrp (in the notebook)', 'Run the setup in 7.1, or open the notebook from the notebooks/ folder so it can find ../src.'],
     ['FileNotFoundError: data/...', 'The CSV is not in `data/` or has a different name. Check the name matches the query file.'],
     ['ValueError: more than one row for some TINs', 'The download is wrong (the query was changed or run twice). Re-run the query and download again.'],
@@ -547,6 +649,27 @@ d.table('Common Problems', ['Message', 'Cause and fix'], [
     ['check shows "rows not a round cut-off" as CHECK', 'Hue may have cut the download. Download again, making sure you take all rows.'],
     ['A test fails after you changed something', 'The change broke a promise the model makes (the test name says which). Fix it before scoring.'],
 ], [6.5, 10.5])
+
+d.h2('7.9 History Since 2017: the Long Run')
+d.p('Hue stops a query after about 30 minutes and a download at 100,000 rows. The full feature query for one date '
+    'takes about 30 minutes, so the history since 2014 comes from a lighter query: one row per taxpayer per '
+    'half-year, with counts that add up exactly. It runs as 12 one-year pieces, each well under the row limit.')
+d.numbered([
+    'Run `python main.py sql --long-run`. The pieces are written to `sql/long_run/if_too_big/` (and half-year '
+    'pieces to `sql/long_run/if_still_too_big/` for any year that still reaches 100,000 rows).',
+    'Run each piece in Hue as one statement, stay on the tab, and save the result as `data/long_run/long_run_<year>.csv`.',
+    'Run `python main.py long-run`. It refuses any file that stopped at exactly 100,000 rows, builds a snapshot for '
+    'every date (`data/long_run/lr_<date>.csv`) and copies the yearly counts into the full extracts in `data/` so '
+    'the model can weight recent years.',
+    'Run `python main.py performance --long-run` for the nine-year results (`results/CTRP_performance_since_2017.xlsx`).',
+])
+d.h2('7.10 The Blind Review of Track B')
+d.code(['python main.py review results/CTRP_scores_2026-09-30.xlsx --blind 25    # query + key',
+        'python main.py blind-pack data/evidence/blind_2026-09-30.csv sql/review/blind_2026-09-30_KEY.csv'])
+d.p('The first command picks the top 25 flagged taxpayers and 25 unflagged ones from the same segments, mixes them '
+    'under codes R01 to R50 and writes the evidence query and the key. Run the query in Hue, then the second command '
+    'builds the officers\' workbook with codes, entries and a verdict column, and nothing that says who was flagged. '
+    'The key stays with Data Science until the verdicts are in (Part 10).')
 
 # ================================================================================ PART 8
 d.part('PART 8: CHANGING THE MODEL SAFELY',
@@ -605,14 +728,14 @@ d.h2('8.3 The Automatic Tests')
 d.p('The tests in `tests/` run the model on made-up taxpayers (never real data) and check the promises it makes. If '
     'a change breaks one, the test says which.')
 d.table('What the Tests Check', ['File', 'Promises checked'], [
-    ['test_core.py', 'The ruler is 0 below the concern level and 1 at the maximum; band edges; the small-count weighting only lowers; weights add to 100 and missing parameters are reweighted; scoring is repeatable; the pattern check adds no points; every reason has points; the fingerprint changes with a setting'],
+    ['test_core.py', 'The ruler is 0 below the minimum risk level and 1 at the maximum; band edges; the small-count weighting only lowers; weights add to 100 and missing parameters are reweighted; scoring is repeatable; the pattern check adds no points; every reason has points; the fingerprint changes with a setting'],
     ['test_utils.py', 'Lift of a perfect ranking beats random; lift of everyone is 1; TINs stay text; duplicate TINs are refused'],
     ['test_report.py', 'The workbook has the agreed sheets in the agreed order'],
     ['test_extract.py', 'Query dates are right and no placeholder is left; a clean download passes every check'],
     ['test_challengers.py', 'The comparison runs every model and blend'],
 ], [4, 13])
 d.h2('8.4 Recipe: Change a Threshold')
-d.p('Find the parameter in PARAMS (in `src/ctrp/core.py`) and change zero_at (concern level) or one_at (maximum). '
+d.p('Find the parameter in PARAMS (in `src/ctrp/core.py`) and change zero_at (minimum risk level) or one_at (maximum). '
     'For example, to test a 35% maximum for PAR_045T:')
 d.code(["dict(code='PAR_045T', col='top_up_entry_rate', zero_at=0.03, one_at=0.35, L=5, I=5, ..."])
 d.p('Then raise MODEL_VERSION, run the tests and the back-test, and compare. The reason sentence updates itself '
@@ -649,7 +772,7 @@ qa = [
     ['Why not a machine-learning model?', 'We tested several (Part 6). The best gained a little in 3 of 4 tests and lost in 1, and it learns from outcomes chosen by the selectivity system. The scorecard is explainable in the officers\' own thresholds. Boosting goes to round 2.'],
     ['You promised about 20 parameters; why 8?', '8 have data in the view, 2 more are built and wait for the next extract, and 11 need data that is not in the view (declaration versions, boxes 45 and 46, penalties, agent TIN). None was left out for any other reason.'],
     ['Why does a taxpayer topped up on 1 of 2 declarations score low?', 'Two declarations prove little (a coin tossed twice). The weighting spares them, and the LIM note tells the officer the score rests on little history.'],
-    ['Why 40% and not the officers\' 10%?', 'At 10%, a third of regular traders hit full points and the list could not rank them. The concern level stays at their 3%.'],
+    ['Why 40% and not the officers\' 10%?', 'At 10%, a third of regular traders hit full points and the list could not rank them. The minimum risk level stays at their 3%.'],
     ['Isn\'t it just repeating the selectivity system?', 'Partly, possibly; all models trained or judged on checked declarations share this. It is why we want a random check share or audit outcomes, and why the expert scorecard (not fitted to past selections) is the safer release 1 choice.'],
     ['The design promised clustering and anomaly detection. Where are they?', 'Tested on real data: HDBSCAN left 77% of traders without a group, and anomaly points lowered lift because unusual is not risky. Both are recorded with evidence; the pattern check stays as a note.'],
     ['Is a lift of about 4.5 good?', 'It is well above the baseline (about 3.6 at the top 5%) and above the 3x minimum proposed in the design document for the top 10% (4.05), below its 5x target. Published customs figures score single declarations and are not comparable.'],
@@ -658,15 +781,75 @@ qa = [
     ['Can importers game it?', 'The parameters come from customs\' own actions (top-ups, amendments, benchmarks), not from what importers report about themselves. Keep the reason codes internal.'],
     ['Why might a taxpayer change band between two runs?', 'Their 24-month window moves on, peers change and the population averages change. The fingerprint shows whether the settings changed too.'],
     ['What does provisional mean?', 'The thresholds, weights and bands are working values until the Risk Officers confirm them. Every workbook says so on the Read me sheet.'],
-    ['Why not combine models (an ensemble)?', 'We tested five ways of combining them (Part 6.5). The blend of all models is the best all-round result and is the leading candidate for the next round; it was not adopted yet because the gain is small, significant in only half the tests, and the ranking would no longer follow the points officers see.'],
+    ['Why not combine models (an ensemble)?', 'We tested five ways of combining them (Part 6.6). The blend of all models is the best all-round result and is the leading candidate for the next round; it was not adopted yet because the gain is small, significant in only half the tests, and the ranking would no longer follow the points officers see.'],
+    ['Is "the riskiest 8% give half the hits" new?', 'No, and it should not be sold as new: officers already target repeat offenders. What is new is that every taxpayer is scored the same way, with reasons, over time, that the bands are shown to mean what they say, and that the other half of the risk sits below HIGH, where history cannot see it. That is what Track B is for.'],
+    ['Why measure per check?', 'Officers judge selectivity by what checks find. Counting taxpayers rewards being checked often; counting checks does not (4.6).'],
+    ['Did the model get worse after 2024?', 'Over nine years AUC per check stayed between 0.77 and 0.86. The one dip (0.74, March 2025) came when the hit rate of all checks fell from 11-13% to 7%, and it is recovering (4.8).'],
+    ['Why three years, and why halving?', 'Tested on 18 dates: three years with each year counting half the next is the only weighting better than the old two-year rule on every date. Five years adds nothing measurable (4.9).'],
+    ['How do you know Track B finds anything?', 'Against top-ups it ranks checks better than chance and better than Track A within the no-history group (AUC 0.62 regular, 0.57 small), but top-ups cannot show undervaluation that was never found. The blind review is the real test (Part 10).'],
     ['Who decides thresholds and weights?', 'The Risk Officers, in a ratings session, using the evidence in this guide and the learned weights from Part 6 as input.'],
 ]
 d.table('Questions and Answers', ['Question', 'Answer'], qa, [5.5, 11.5])
 
+# ================================================================================ PART 10
+d.part('PART 10: TWO TRACKS: COMPLIANCE HISTORY AND TRADING BEHAVIOUR',
+       'Why one view of risk is not enough, what Track B looks at, how the two tracks combine into the Overall Risk '
+       'Band, and how Track B is being proven.')
+d.h2('10.1 Why a Second Track')
+d.p('Track A (Parts 1 to 4) scores a taxpayer\'s own compliance record: top-ups, amendments, reductions. It works, '
+    'but it can only see risk that customs has already found. About 69% of taxpayers have no top-up history at all, '
+    'and in the back-tests about half of all hits come from taxpayers below HIGH. A trader who undervalues and has '
+    'never been caught scores zero on Track A.')
+d.p('Track B looks at **how a taxpayer trades**, compared with similar importers (same main goods, same size), '
+    'without using anything customs did to them (no top-ups, no lanes). It is built for the taxpayers with no '
+    'top-up history.')
+d.h2('10.2 What Track B Looks At')
+d.bullets([
+    'Prices below what other importers declare for the same tariff line and origin.',
+    'Amendments, goods spread (many kinds of goods per declaration), station spread, sudden surges in volume, and newness.',
+    'Each measure is turned into a percentile within the peer group, so a trader is compared with traders like them.',
+    'A learned model (monotone boosting, trained only on earlier dates) combines them, separately for regular traders '
+    '(10 or more declarations) and small traders (fewer).',
+])
+d.h2('10.3 How the Two Tracks Combine')
+d.table('From Two Tracks to One Band', ['Column', 'What it is'], [
+    ['History Risk Score and Band', 'Track A: the compliance record'],
+    ['Risky Behaviour Flag', 'Track B: Y for the top 5% of regular and the top 1% of small traders with no top-up history'],
+    ['Behaviour risk percentile', 'How the taxpayer\'s behaviour ranks against similar importers'],
+    ['Overall Risk Band', 'The higher of the two; a Risky Behaviour Flag raises a taxpayer to HIGH at most until the flags are proven'],
+    ['Overall band set by', 'Compliance history or Trading behaviour'],
+    ['Entry evidence', 'For flagged taxpayers: the entries priced furthest below peers, with entry number, station and year, so an officer can open them'],
+], [5, 12])
+d.h2('10.4 How Well Track B Does Against Top-ups')
+d.p('Judged with the main measure (AUC per check) within the taxpayers it is for, on the four dates the full '
+    'extracts allow, each trained only on earlier dates (decision 95):')
+d.table('Track B Against Top-ups (AUC per check, no-history taxpayers)', ['Group', 'Track B', 'Track A on the same group', 'Chance'], [
+    ['Regular traders', '0.62 (0.58 to 0.65)', '0.55', '0.50'],
+    ['Small traders', '0.57 (0.53 to 0.59)', '0.52', '0.50'],
+], [5, 4.5, 4.5, 3])
+d.p('A real but modest signal, consistent on every date. Top-ups are the wrong yardstick for most of what Track B '
+    'looks for: an undervaluation that was never found never became a top-up. So top-ups can only show the part of '
+    'Track B\'s value that customs already catches.')
+d.h2('10.5 Proving Track B: the Blind Review')
+d.numbered([
+    'The top 25 flagged taxpayers are mixed with 25 unflagged taxpayers with no top-up history, picked at random from '
+    'the same segments (decision 86).',
+    'Officers see only codes, TINs and entries priced below peers, with a strength column (how far below) and a mark '
+    'where the same goods appear on two entries. They do not know who was flagged.',
+    'For each code they write Act, Do not act or Not sure.',
+    'If the flagged group draws clearly more "Act" verdicts than the comparison group, Track B finds real risk.',
+])
+d.note('Why blind', 'If officers knew who was flagged, they would look harder at those and find more, and the test '
+       'would prove nothing.')
+d.p('A low price is a reason to look, not proof: the customs value follows the valuation methods in order. Fuel '
+    '(HS 27) is left out of the evidence, and prices under 5% of peers are marked "Check units" because they are '
+    'more often a weight or quantity keyed in the wrong unit.')
+
 d.annex('Annex A: Settings Reference')
 d.table('Settings in src/ctrp/core.py', ['Setting', 'Value', 'Meaning'], [
-    ['MODEL_VERSION', '1.0.0-dev4', 'Raised whenever a change can move a score'],
-    ['PARAMS', '8 parameters', 'Code, column, concern level, maximum, L, I, wording (Part 3)'],
+    ['MODEL_VERSION', '1.0.0-dev5', 'Raised whenever a change can move a score'],
+    ['RECENCY_WEIGHTS', '1, 0.5, 0.25', 'How much each of the last 3 years counts in the history rates (4.9)'],
+    ['PARAMS', '8 parameters', 'Code, column, minimum risk level, maximum, L, I, wording (Part 3)'],
     ['SHRINK_K', '10', 'Small-count weighting strength: w = n / (n + 10)'],
     ['SHRINK_N', 'PAR_076 uses items', 'Which count n each rate is weighted by (default: declarations)'],
     ['ADEQUATE_ENTRIES', '10', 'Below this: limited history, no peer group, no pattern note'],

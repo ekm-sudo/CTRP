@@ -1,0 +1,26 @@
+%pyspark
+# Each declaration of the last 3 years gets a weight by how long ago it was; the rates become weighted averages
+year_weight = (F.when(F.col('adate') > F.add_months(snap_date, -12), 1.0)
+                .when(F.col('adate') > F.add_months(snap_date, -24), 0.5)
+                .otherwise(0.25))
+w = F.col('w')
+
+def weighted_rate(column):
+    # (1 x count in year 1 + 0.5 x count in year 2 + 0.25 x count in year 3) / (the same for declarations)
+    return F.sum(w * column) / F.sum(w)
+
+amended_01 = F.when(F.col('amended') == 'Y', 1).otherwise(0)
+final_tax_w = F.col('_orig_tax') + F.col('_top_up')
+recency = (decl.where(F.col('dt') <= SNAP).withColumn('w', year_weight)
+               .groupBy('taxpayer_tin')
+               .agg(weighted_rate(F.col('topped_up')).alias('topped_up_per_decl_3y_rate'),
+                    weighted_rate(F.col('severe')).alias('severe_top_up_per_decl_3y_rate'),
+                    weighted_rate(amended_01).alias('amended_per_decl_3y_rate'),
+                    weighted_rate(F.col('negative_top_up')).alias('tax_reduced_per_decl_3y_rate'),
+                    F.sum(w * F.col('top_up')).alias('_top_up'),
+                    F.sum(w * F.col('orig_tax')).alias('_orig_tax'))
+               .withColumn('top_up_per_final_tax_3y_rate', F.when(final_tax_w > 0, F.col('_top_up') / final_tax_w))
+               .drop('_top_up', '_orig_tax'))
+parts['recency'] = recency
+peek(base.join(parts['topped_up_per_decl_24m_rate'], 'taxpayer_tin').join(recency, 'taxpayer_tin')
+         .select('taxpayer_tin', 'decl_24m_count', 'topped_up_per_decl_24m_rate', 'topped_up_per_decl_3y_rate'))

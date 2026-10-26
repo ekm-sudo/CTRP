@@ -1,0 +1,7 @@
+%pyspark
+recent = F.when(F.col('adate') > F.date_sub(snap_date, 90), 1).otherwise(0)
+parts['decl_90d_per_avg_qtr_24m_log'] = (hist.groupBy('taxpayer_tin')
+                      .agg(F.count('*').alias('_n'), F.sum(recent).alias('decl_90d_count'))
+                      .withColumn('decl_90d_per_avg_qtr_24m_log', F.log((F.col('decl_90d_count') + 1) / (F.col('_n') / 8.0 + 1)))
+                      .drop('_n'))
+peek(parts['decl_90d_per_avg_qtr_24m_log'].orderBy(F.desc('decl_90d_per_avg_qtr_24m_log')))

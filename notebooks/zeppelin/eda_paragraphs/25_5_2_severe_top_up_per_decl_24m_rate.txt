@@ -1,0 +1,4 @@
+%pyspark
+parts['severe_top_up_per_decl_24m_rate'] = (hist.groupBy('taxpayer_tin')
+                                         .agg(F.avg('severe').alias('severe_top_up_per_decl_24m_rate')))
+peek(parts['severe_top_up_per_decl_24m_rate'])

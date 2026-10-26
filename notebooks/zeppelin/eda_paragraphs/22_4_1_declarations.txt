@@ -1,0 +1,34 @@
+%pyspark
+decl = (items.groupBy('instance_id')
+             .agg(F.max('taxpayer_tin').alias('taxpayer_tin'),
+                  F.max('taxpayer_nm').alias('taxpayer_nm'),
+                  F.max('adate').alias('adate'),
+                  F.max('assessment_dt_wid').alias('dt'),
+                  F.max('regime_cd').alias('regime'),
+                  F.coalesce(F.max('original_tax_amt'), F.max('final_amt')).alias('orig_tax'),   # blank = unchanged
+                  F.max('final_amt').alias('final_tax'),
+                  F.max('top_up_flg').alias('top_up_flg'),
+                  F.max('amendment_flg').alias('amended'),
+                  F.max('clearance_station_cd').alias('station'),
+                  F.max('is_red_flg').alias('red'),
+                  F.max('is_yellow_flg').alias('yellow'),
+                  F.max('pay_status').alias('pay_status'),
+                  F.sum('customs_value').alias('value'),
+                  F.count('*').alias('n_items')))
+
+topped_up = (F.col('top_up_flg') == 'Y') & (F.col('final_tax') > F.col('orig_tax'))
+decl = (decl.withColumn('topped_up', F.when(topped_up, 1).otherwise(0))
+            .withColumn('top_up', F.when(topped_up, F.col('final_tax') - F.col('orig_tax')).otherwise(0.0))
+            .withColumn('negative_top_up', F.when(F.col('final_tax') < F.col('orig_tax'), 1).otherwise(0))
+            .withColumn('severe', F.when((F.col('topped_up') == 1)
+                                         & (F.col('top_up') >= 0.30 * F.col('final_tax')), 1).otherwise(0))
+            .cache())
+
+# The 24-month history window used by the features (never anything after the snapshot)
+in_history = (F.col('dt') > HIST_START) & (F.col('dt') <= SNAP)
+hist = decl.where(in_history).cache()
+hist_items = items.where((F.col('assessment_dt_wid') > HIST_START) & (F.col('assessment_dt_wid') <= SNAP)).cache()
+print('Declarations in the 24 months: {:,}'.format(hist.count()))
+peek(hist.select('instance_id', 'taxpayer_tin', 'dt', 'regime', 'n_items', 'value', 'orig_tax', 'final_tax',
+                 'top_up_flg', 'topped_up', 'top_up', 'severe', 'negative_top_up', 'amended', 'red', 'yellow',
+                 'station'))

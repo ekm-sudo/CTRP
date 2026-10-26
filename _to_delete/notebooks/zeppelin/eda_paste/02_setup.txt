@@ -1,0 +1,52 @@
+%pyspark
+# ===================== Setup: libraries, dates and small helpers (no need to edit) =====================
+import calendar, datetime
+from functools import reduce
+from pyspark.sql import functions as F, Window
+import numpy as np
+import pandas as pd
+
+def as_date(date_text):
+    return datetime.datetime.strptime(date_text, '%Y-%m-%d').date()
+
+def month_end(date_text, months):
+    # The last day of the month `months` away from the date (negative = earlier)
+    d = as_date(date_text)
+    y, m = divmod(d.year * 12 + d.month - 1 + months, 12)
+    return datetime.date(y, m + 1, calendar.monthrange(y, m + 1)[1])
+
+def ymd(d):
+    return d.strftime('%Y%m%d')       # dates in the view are text like '20260930'
+
+# The windows, all counted back from the snapshot
+SNAP = ymd(as_date(SNAPSHOT))
+HIST_START = ymd(month_end(SNAPSHOT, -24))     # features use the 24 months before the snapshot
+HIST3_START = ymd(month_end(SNAPSHOT, -36))    # recency weighting uses 3 years
+PRIOR_START = ymd(month_end(SNAPSHOT, -60))    # "new trader": nothing in the 3 years before the 24 months
+OUT_END = ymd(month_end(SNAPSHOT, 6)) if WITH_OUTCOMES else SNAP
+snap_date = F.to_date(F.lit(SNAPSHOT))
+
+def median(column_sql):
+    # The middle value, as the production query computes it (Spark's percentile_approx)
+    return F.expr('percentile_approx(%s, 0.5)' % column_sql)
+
+def peek(df, n=10):
+    # Show the first rows of a result
+    z.show(df.head(n) if isinstance(df, pd.DataFrame) else df.limit(n))
+
+def save(df, name):
+    # Keep a result as a table in this session, and as CSV files or a Hive table when switched on
+    if isinstance(df, pd.DataFrame):
+        df = spark.createDataFrame(df)
+    df.createOrReplaceTempView(name)
+    if SAVE_TO_FOLDER:
+        df.coalesce(1).write.mode('overwrite').option('header', True).csv(OUT_DIR + '/' + name)
+    if SAVE_TO_SCHEMA:
+        df.write.mode('overwrite').saveAsTable(SAVE_TO_SCHEMA + '.' + name)
+
+print('Snapshot:', SNAPSHOT)
+print('Features use declarations after', HIST_START, 'up to', SNAP, '(24 months)')
+print('Recency uses declarations after', HIST3_START, '(36 months)')
+print('Outcomes:', ('after ' + SNAP + ' up to ' + OUT_END) if WITH_OUTCOMES else 'none (live snapshot)')
+print('Results kept in this session' + (', written to ' + OUT_DIR if SAVE_TO_FOLDER else '')
+      + (', saved in schema ' + SAVE_TO_SCHEMA if SAVE_TO_SCHEMA else ''))

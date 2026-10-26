@@ -1,0 +1,8 @@
+%pyspark
+WATCHLIST = ['404', '409', '417', '451', '455', '457', '476', '479', '481', '482', '484']
+valued = hist_items.where(F.col('customs_value') > 0)
+value_under = lambda test: F.sum(F.when(test, F.col('customs_value')).otherwise(0)) / F.sum('customs_value')
+parts['apc_features'] = valued.groupBy('taxpayer_tin').agg(
+    value_under(F.col('cpc_cd') != '000').alias('exempt_apc_per_value_24m_rate'),
+    value_under(F.col('cpc_cd').isin(WATCHLIST)).alias('watchlist_apc_per_value_24m_rate'))
+peek(parts['apc_features'])

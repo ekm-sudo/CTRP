@@ -1,0 +1,16 @@
+%pyspark
+taxed = (hist_items.where((F.col('customs_value') > 0) & (F.col('tax_assessed') >= 0))
+                   .withColumn('rate', F.col('tax_assessed') / F.col('customs_value')))
+duty_bench = (taxed.where(F.col('cpc_cd') == '000').groupBy('hsc_cd')
+                   .agg(median('rate').alias('med_rate'), F.countDistinct('taxpayer_tin').alias('importers'))
+                   .where('importers >= 5').drop('importers'))
+taxed = taxed.join(duty_bench, 'hsc_cd', 'left')
+
+compared = (F.col('cpc_cd') == '000') & (F.col('med_rate') > 0)          # no exemption, and a benchmark exists
+value_compared = F.sum(F.when(compared, F.col('customs_value')).otherwise(0))
+low_rate = compared & (F.col('rate') < 0.5 * F.col('med_rate'))
+missing_tax = F.greatest(F.col('med_rate') * F.col('customs_value') - F.col('tax_assessed'), F.lit(0))
+parts['duty_features'] = taxed.groupBy('taxpayer_tin').agg(
+    (F.sum(F.when(low_rate, F.col('customs_value')).otherwise(0)) / value_compared).alias('duty_under_half_peer_per_value_24m_rate'),
+    (F.sum(F.when(compared, missing_tax).otherwise(0)) / value_compared).alias('duty_gap_vs_peer_per_value_24m_rate'))
+peek(parts['duty_features'])

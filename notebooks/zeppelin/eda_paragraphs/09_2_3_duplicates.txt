@@ -1,0 +1,21 @@
+%pyspark
+n_rows = eda.count()
+n_distinct_rows = eda.distinct().count()
+n_items = eda.select('instance_id', 'key_itm_nbr').distinct().count()
+item_versions = eda.distinct().groupBy('instance_id', 'key_itm_nbr').count()          # different versions of an item
+copies = eda.groupBy('instance_id', 'key_itm_nbr').count()                             # copies of an item
+ids_per_entry = eda.groupBy('entry_key').agg(F.countDistinct('instance_id').alias('ids'))
+per_id = eda.groupBy('instance_id').agg(F.countDistinct('taxpayer_tin').alias('tins'),
+                                        F.countDistinct('assessment_dt_wid').alias('dates'))
+duplicates = pd.DataFrame([
+    ('Item rows (24 months, IM4 and IM7)', n_rows, ''),
+    ('Rows that are an exact copy of another row', n_rows - n_distinct_rows, 'R5 keeps one copy'),
+    ('Rows that repeat an item (same declaration ID and item number)', n_rows - n_items, 'E02, R5'),
+    ('Items whose copies are NOT all identical', item_versions.where('count > 1').count(),
+     '0 means keeping one copy loses nothing'),
+    ('Most copies of one item', copies.agg(F.max('count')).first()[0], ''),
+    ('Entries under more than one declaration ID', ids_per_entry.where('ids > 1').count(), 'E01, R14'),
+    ('Declaration IDs with more than one TIN', per_id.where('tins > 1').count(), 'expected 0'),
+    ('Declaration IDs with more than one assessment date', per_id.where('dates > 1').count(), 'expected 0'),
+], columns=['check', 'count', 'note'])
+z.show(duplicates)

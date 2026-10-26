@@ -1,0 +1,7 @@
+%pyspark
+parts['price_features'] = it.groupBy('taxpayer_tin').agg(
+    F.avg('implausible').alias('price_keying_error_per_item_24m_rate'),
+    F.avg('low_price').alias('price_under_half_peer_per_item_24m_rate'),
+    median('CASE WHEN implausible = 0 THEN price_deviation END').alias('median_price_dev_from_peer_24m_log'),
+    F.avg('on_origin_bench').alias('priced_on_coo_peer_per_item_24m_rate'))
+peek(parts['price_features'])

@@ -22,7 +22,7 @@ TEMPLATE = HERE / 'ura_template.docx'
 LOGO = HERE / 'ura_logo.png'
 CHARTS = ROOT / 'results' / 'charts'
 OUT = ROOT / 'docs' / 'CTRP_Decision_Record.docx'
-VERSION = '0.2'
+VERSION = '0.3'
 DATE = 'October 2026'
 
 
@@ -60,7 +60,7 @@ d.table('Document Information', ['Field', 'Details'], [
     ['Version', f'{VERSION} (draft for review)'],
     ['Classification', 'Confidential'],
     ['Owner', 'Data Science Section, Data, Innovations and Projects Division, ITID'],
-    ['Model version recorded', '1.0.0-dev4 (settings fingerprint printed on every output)'],
+    ['Model version recorded', '1.0.0-dev5 (settings fingerprint printed on every output)'],
 ], [4, 13])
 d.table('Document Version History', ['Version', 'Date', 'Author(s)', 'Role', 'Changes'], [
     ['0.1', DATE, 'Ethan Mugire', 'Officer, Data Science',
@@ -69,6 +69,10 @@ d.table('Document Version History', ['Version', 'Date', 'Author(s)', 'Role', 'Ch
     ['0.2', DATE, 'Ethan Mugire', 'Officer, Data Science',
      'Lift worked through with real numbers; ensembles tested (decisions 52 to 54); project reorganised into the '
      'standard src layout with automatic tests (decision 55).'],
+    ['0.3', DATE, 'Ethan Mugire', 'Officer, Data Science',
+     'Round 2 (Part 7): the two-track design, data since 2014 through the long run, performance measured per check, '
+     'nine years of validation, three years of history with recent years counting more, Track B results and the '
+     'blind review. Open questions moved to Part 8 and updated (decisions 57 to 95).'],
 ], [1.5, 2.5, 3, 3, 7])
 d.table('Document Reviewers', ['Name', 'Role', 'Signature', 'Date'], [
     ['Stella Kwera Kisuze', 'Supervisor, Data Science', '', ''],
@@ -90,7 +94,7 @@ d.p('This record was prepared by the Data Science Section under the Data, Innova
 d.table('Audience for Internal Distribution', ['Audience', 'Primary Use'], [
     ['Data Science', 'Reference for the design, the evidence behind each setting, and how to change it safely.'],
     ['Customs Risk Management and the National Targeting Centre', 'Review of the parameters, thresholds, bands and reason wording; '
-     'the open questions in Part 7 need their answers.'],
+     'the open questions in Part 8 need their answers.'],
     ['Data Engineering', 'The source view, the cleaning rules and the extract query the model depends on.'],
     ['Data Governance and Internal Audit', 'Traceability: every score carries a model version and a settings fingerprint that this record explains.'],
 ], [5, 12])
@@ -160,7 +164,8 @@ d.p('Every setting was judged in a back-test on each of the six past snapshots, 
     'model ranks in its top 1%, 5% and 10%, divided by the hit rate of all taxpayers. A lift of 4 means the top '
     'group was topped up four times as often as the average taxpayer. Every result is compared with a simple '
     'baseline, ranking on past top-up ratio alone. From decision 48, lift is reported together with the number of '
-    'hits caught, the share of top-up revenue caught and the share of small traders in the top group, because '
+    'hits caught, the share of top-up revenue caught, the top-up revenue per check and the share of small traders in '
+    'the top group, because '
     'lift alone can be raised by moving the top of the list onto small one-off importers.')
 d.table('Lift Worked Through (31 March 2026, release 1 model)', ['Group', 'Taxpayers', 'Checked declarations', 'Hits', 'Hit rate', 'Lift', 'Share of all hits'], [
     ['Top 1%', '582', '2,469', '794', '32.2%', '4.6', '6%'],
@@ -236,7 +241,7 @@ d.bullets([
 ])
 d.figure(chart(14), 'The top-up ratio over original tax and over final tax')
 d.h2('3.3 The Adopted Scorecard')
-d.table('Scored Parameters, Thresholds and Weights', ['Code', 'Parameter', 'Concern from', 'Maximum at', 'L x I', 'Weight'], [
+d.table('Scored Parameters, Thresholds and Weights', ['Code', 'Parameter', 'Minimum risk level', 'Maximum at', 'L x I', 'Weight'], [
     ['PAR_045T', 'Declarations topped up', '3%', '40%', '5 x 5', '33%'],
     ['PAR_077', 'Severe top-ups (30% or more of final tax)', '2%', '20%', '4 x 5', '26%'],
     ['PAR_045', 'Declarations amended', '10%', '50%', '4 x 4', '21%'],
@@ -246,7 +251,7 @@ d.table('Scored Parameters, Thresholds and Weights', ['Code', 'Parameter', 'Conc
     ['PAR_105', 'Top-up within 180 days', 'no', 'yes', '3 x 1', '4%'],
     ['PAR_023', 'Clearance away from main station', '30%', '70%', '3 x 1', '4%'],
 ], [2.2, 6.3, 2.2, 2.2, 1.8, 1.8])
-d.p('Each parameter scores 0 at its concern level, full weight at its maximum, and a straight line between. If '
+d.p('Each parameter scores 0 at its minimum risk level, full weight at its maximum, and a straight line between. If '
     'a parameter cannot be computed for a taxpayer, the others are reweighted to still total 100. The likelihood '
     'and impact ratings are Data Science working ratings set from the back-test, to be confirmed with the Risk '
     'Officers.')
@@ -381,18 +386,28 @@ d.bullets([
     'sits, floored at zero), so they could only react to worse-than-peer behaviour.',
 ])
 d.h2('6.2 Results')
-d.table('Challenger Results (average of 4 test snapshots)', ['Model', 'Lift 1% / 5% / 10%', 'Hits in top 5%', 'Revenue in top 5%', 'Small traders in top 5%', 'vs scorecard (top 5%)'], [
-    ['Scorecard (release 1)', '4.30 / 4.37 / 3.86', '5,522', '45%', '53%', ''],
-    ['Baseline: past top-up ratio', '1.93 / 2.58 / 2.71', '807', '13%', '94%', '0 better, 2 worse'],
-    ['Learned weights (logistic)', '4.11 / 5.00 / 4.49', '5,070', '38%', '59%', '3 better, 0 worse'],
-    ['Data-estimated shrinkage', '4.88 / 3.97 / 3.50', '2,238', '35%', '78%', '0 better, 1 worse'],
-    ['Monotone boosting (same 8 inputs)', '5.71 / 4.75 / 4.13', '5,809', '43%', '53%', '3 better, 1 worse'],
-    ['Monotone boosting with size', '7.33 / 6.30 / 5.85', '3,508', '19%', '83%', '4 better, 0 worse'],
-    ['Peer percentile (one-sided)', '3.65 / 3.48 / 2.62', '4,228', '45%', '53%', '0 better, 4 worse'],
-    ['Ensemble: Isolation Forest + PCA', '3.49 / 2.13 / 1.26', '6,678', '50%', '42%', '0 better, 4 worse'],
-    ['K-Means distance', '3.41 / 2.49 / 1.46', '6,424', '45%', '37%', '0 better, 4 worse'],
-    ['Gaussian mixture', '3.38 / 1.20 / 1.15', '8,414', '57%', '28%', '0 better, 4 worse'],
-], [4.5, 3.4, 2.2, 2.2, 2.4, 2.8], size=8)
+d.table('Challenger Results (average of 4 test snapshots)', ['Model', 'Lift 1% / 5% / 10%', 'Hits in top 5%', 'Revenue in top 5%', 'Revenue per check (UGX M)', 'Small traders in top 5%', 'vs scorecard (top 5%)'], [
+    ['Scorecard (release 1)', '4.30 / 4.37 / 3.86', '5,522', '45%', '1.18', '53%', ''],
+    ['Baseline: past top-up ratio', '1.93 / 2.58 / 2.71', '807', '13%', '1.39', '94%', '0 better, 2 worse'],
+    ['Largest importers by value (reference)', '0.39 / 0.52 / 0.71', '5,099', '53%', '0.17', '2%', '0 better, 4 worse'],
+    ['Learned weights (logistic)', '4.11 / 5.00 / 4.49', '5,070', '38%', '1.27', '59%', '3 better, 0 worse'],
+    ['Data-estimated shrinkage', '4.88 / 3.97 / 3.50', '2,238', '35%', '1.93', '78%', '0 better, 1 worse'],
+    ['Monotone boosting (same 8 inputs)', '5.71 / 4.75 / 4.13', '5,809', '43%', '1.16', '53%', '3 better, 1 worse'],
+    ['Monotone boosting with size', '7.33 / 6.30 / 5.85', '3,508', '19%', '1.41', '83%', '4 better, 0 worse'],
+    ['Peer percentile (one-sided)', '3.65 / 3.48 / 2.62', '4,228', '45%', '1.16', '53%', '0 better, 4 worse'],
+    ['Ensemble: Isolation Forest + PCA', '3.49 / 2.13 / 1.26', '6,678', '50%', '0.51', '42%', '0 better, 4 worse'],
+    ['K-Means distance', '3.41 / 2.49 / 1.46', '6,424', '45%', '0.59', '37%', '0 better, 4 worse'],
+    ['Gaussian mixture', '3.38 / 1.20 / 1.15', '8,414', '57%', '0.25', '28%', '0 better, 4 worse'],
+], [4.2, 3.2, 1.9, 1.9, 2.0, 2.0, 2.6], size=8)
+d.p('**How to read the revenue columns.** "Revenue in top 5%" adds up the top-up money customs actually raised on '
+    'the declarations of the taxpayers a model ranks in its top 5%, over the 6 months after the snapshot, as a share '
+    'of all top-up money raised in that period. It is not money the model creates. Because top-up money grows with '
+    'how much a taxpayer imports and how often they are checked, this share rises whenever a model puts big importers '
+    'at the top. The reference row shows it: ranking on customs value alone, with no risk information, reaches 53% of '
+    'top-up revenue with a lift of 0.52 (half the average hit rate). Revenue per check (top-up money divided by the '
+    'checks it took) removes the size effect; on that measure the scorecard yields UGX 1.18 million per check, the '
+    'Gaussian mixture UGX 0.25 million. Revenue per check on very few checks is noisy (the data-estimated shrinkage '
+    'figure rests on about 7,600 checks), so it is read with hits caught.')
 d.figure(chart(34), 'Challengers and blends against the scorecard: lift, hits and revenue in the top 5%')
 d.h2('6.3 Decisions from the Comparison')
 d.table('Decisions from Challenger Round 1', ['#', 'Decision', 'Reason'], [
@@ -402,7 +417,8 @@ d.table('Decisions from Challenger Round 1', ['#', 'Decision', 'Reason'], [
      'officers\' own thresholds'],
     ['48', 'Lift is always reported with hits caught, revenue caught and the small-trader share', 'Boosting with size reaches lift 6.3 by filling the top 5% with one-off importers, catching fewer hits and 19% of revenue'],
     ['49', 'One-way weighting at K = 10 stays', 'The data-estimated K (about 3) with two-way shrinkage pushed small traders up and caught 60% fewer hits'],
-    ['50', 'The four Scope and Design candidates are not pursued as scorers', 'All lose on lift in 4 of 4 tests even with one-sided features; they catch revenue by picking large, high-volume traders'],
+    ['50', 'The four Scope and Design candidates are not pursued as scorers', 'All lose on lift in 4 of 4 tests even with one-sided features. Their higher revenue share is a size effect: their top 5% needs 2.5 to 5.5 times the checks for UGX 0.25 to 0.59 million per check, against 1.18 million for the scorecard (decision 56)'],
+    ['56', 'Revenue share is only read together with revenue per check', 'Largest importers by value (no risk information): 53% of revenue, lift 0.52, UGX 0.17 million per check. A high revenue share on its own shows size, not targeting'],
     ['51', 'Learned weights are taken to the ratings session as evidence', 'Outcomes put about 76% of the weight on PAR_045T, 14% on PAR_066, 6% on PAR_077 and none on amendments once top-ups are known'],
 ], [1.2, 7.3, 8.5], size=8.5)
 d.figure(chart(36), 'Parameter weights: expert ratings against weights learned from outcomes')
@@ -410,39 +426,94 @@ d.h2('6.4 Ensembles')
 d.p('A blend gives each taxpayer the average of their rank positions in its member models, so a taxpayer stays at '
     'the top only if several models agree. The stacked blend learns how much each member counts from earlier test '
     'snapshots (three tests only). The same protocol applies.')
-d.table('Blends Against the Scorecard (average of 4 test snapshots)', ['Model', 'Lift 1% / 5% / 10%', 'Hits in top 5%', 'Revenue in top 5%', 'Small traders in top 5%', 'vs scorecard (top 5%)'], [
-    ['Scorecard (release 1)', '4.30 / 4.37 / 3.86', '5,522', '45%', '53%', ''],
-    ['Blend: all models', '4.53 / 4.57 / 3.94', '6,119', '46%', '52%', '2 better, 0 worse'],
-    ['Blend: scorecard + boosting + learned weights', '5.24 / 4.80 / 4.32', '5,393', '42%', '55%', '3 better, 0 worse'],
-    ['Blend: scorecard + Scope and Design candidates', '4.83 / 3.90 / 2.40', '6,680', '49%', '43%', '0 better, 2 worse'],
-    ['Blend: scorecard + Gaussian mixture', '5.30 / 3.92 / 3.14', '6,673', '49%', '44%', '0 better, 2 worse'],
-    ['Stacked blend (3 tests)', '2.17 / 3.95 / 3.92', '2,919', '21%', '72%', '1 better, 1 worse'],
-], [4.5, 3.4, 2.2, 2.2, 2.4, 2.8], size=8)
+d.table('Blends Against the Scorecard (average of 4 test snapshots)', ['Model', 'Lift 1% / 5% / 10%', 'Hits in top 5%', 'Revenue in top 5%', 'Revenue per check (UGX M)', 'Small traders in top 5%', 'vs scorecard (top 5%)'], [
+    ['Scorecard (release 1)', '4.30 / 4.37 / 3.86', '5,522', '45%', '1.18', '53%', ''],
+    ['Blend: all models', '4.53 / 4.57 / 3.94', '6,119', '46%', '1.11', '52%', '2 better, 0 worse'],
+    ['Blend: scorecard + boosting + learned weights', '5.24 / 4.80 / 4.32', '5,393', '42%', '1.25', '55%', '3 better, 0 worse'],
+    ['Blend: scorecard + Scope and Design candidates', '4.83 / 3.90 / 2.40', '6,680', '49%', '0.93', '43%', '0 better, 2 worse'],
+    ['Blend: scorecard + Gaussian mixture', '5.30 / 3.92 / 3.14', '6,673', '49%', '0.95', '44%', '0 better, 2 worse'],
+    ['Stacked blend (3 tests)', '2.17 / 3.95 / 3.92', '2,919', '21%', '1.05', '72%', '1 better, 1 worse'],
+], [4.2, 3.2, 1.9, 1.9, 2.0, 2.0, 2.6], size=8)
 d.table('Decisions on Ensembles', ['#', 'Decision', 'Reason'], [
     ['52', 'The blend of all models is the leading round 2 challenger; not adopted for release 1',
-     'It is the only model that improves lift, hits and revenue together (better in 2 of 4 tests, worse in none). '
+     'It improves lift, hits and revenue share together (better in 2 of 4 tests, worse in none), with revenue per check about the same (UGX 1.11 against 1.18 million). '
      'Everyone in its top 5% has 15+ scorecard points (median 57) and 85% overlap the scorecard\'s top 5%, so the '
      'reasons still apply. Not adopted yet: significant in only half the tests, the rank would no longer follow the '
      'points officers see, and eight models would run in production. Next: shadow run and blind officer review'],
     ['53', 'Stacked blend rejected for now', 'With three earlier windows to learn from, member weights swing between snapshots and lift at the top 1% falls to 2.2'],
-    ['54', 'Blends with the Scope and Design candidates trade efficiency for volume', 'More hits and revenue, lower lift at 5% and 10%: evidence for OQ-1'],
+    ['54', 'Blends with the Scope and Design candidates are not pursued', 'More hits and revenue share come from more checks on bigger traders: lift falls at 5% and 10% and revenue per check falls to about UGX 0.94 million (decision 56)'],
 ], [1.2, 6.8, 9], size=8.5)
 
 # ------------------------------------------------------------------------------------ PART 7
-d.part('PART 7: OPEN QUESTIONS AND NEXT STEPS',
+d.part('PART 7: ROUND 2: TWO TRACKS, NINE YEARS OF EVIDENCE AND HOW PERFORMANCE IS MEASURED',
+       'The decisions taken after release 1: a second view of risk for taxpayers with no record, the way the '
+       'history since 2014 was obtained and checked, the measure performance is judged by, the evidence over nine '
+       'years, the weighting of recent years, and how Track B is being proven.')
+d.h2('7.1 Two Tracks (decisions 69, 70, 74 to 81)')
+d.p('The scope widened from identifying low-risk taxpayers to profiling every IM4 and IM7 taxpayer. Track A, the '
+    'scorecard, scores the compliance record and cannot see risk that has not yet been found: 69% of taxpayers have '
+    'no top-up history. Track B scores trading behaviour against similar importers, using nothing customs did to '
+    'the taxpayer, for regular and small traders separately. The Overall Risk Band is the higher of the two tracks; '
+    'a Risky Behaviour Flag raises a taxpayer to HIGH at most until the flags are proven. Flagged taxpayers carry '
+    'entry-level evidence (entries priced below peers for the same line and origin), with fuel excluded and very '
+    'low prices marked for a unit check.')
+d.h2('7.2 Data Since 2014: the Long Run (decisions 85, 87, 90, 91)')
+d.p('Hue stops a query after about 30 minutes and a download at 100,000 rows. A one-pass query giving each '
+    'taxpayer\'s additive counts per half-year was run as 12 one-year pieces (29,897 to 48,605 rows each). Checked '
+    'against the six dates also pulled in full: the same taxpayers, and 99.5% to 100% of taxpayers matching on every '
+    'measure, the small differences coming from top-ups recorded after the earlier pull. It cannot give the price '
+    'benchmark or station spread, so it scores on six parameters (92% of the weight); on the six full dates this '
+    'keeps 95% to 97% of the same top 5% and per-check AUC within 0.003.')
+d.h2('7.3 How Performance is Measured (decisions 83, 84, 88)')
+d.table('Measures Adopted', ['Measure', 'Role', 'Reason'], [
+    ['AUC per check', 'Main measure', 'Each red or yellow check is one case; fair to big and small traders; matches how officers judge checks'],
+    ['Share of top-up money above the line', 'Beside it', 'Matches "additional revenue" in the officers\' own measures'],
+    ['Precision and recall at HIGH and above (and other lines)', 'Read at the line officers use', 'Only meaningful once a line is drawn'],
+    ['Per taxpayer, at least one top-up', 'Dropped', 'Rewards being checked often'],
+    ['Accuracy', 'Not used', 'A model that says "nothing found" for everything is about 93% accurate'],
+], [5, 3.5, 8.5])
+d.h2('7.4 Nine Years of Validation (decision 91)')
+d.p('Track A scored at 18 dates, September 2017 to March 2026, each judged on the six months after it. AUC per check '
+    'ranged from 0.74 to 0.86 with the adopted settings, at or above 0.80 on most dates. The one clear dip (September '
+    '2024 to September 2025, low point 0.74) coincides with the hit rate of all checks falling from 11-13% to 7% after '
+    'March 2024, and is recovering (0.80 in March 2026).')
+d.figure(str(CHARTS / 'nine_years.png'), 'AUC per check and the hit rate of all checks, Sep 2017 to Mar 2026')
+d.h2('7.5 Three Years of History, Recent Years Counting More (decisions 92 to 94)')
+d.table('Weightings Tested', ['Option', 'AUC per check', 'Better than the old rule on'], [
+    ['Old rule: last 2 years, equal', '0.813', 'reference (18 dates)'],
+    ['Last year only', '0.804', 'worse on 16 of 18'],
+    ['3 years: equal / gentle / halving / steep', '0.816 / 0.817 / 0.817 / 0.816', '14 / 16 / 18 / 14 of 18'],
+    ['5 years: equal / halving / gentle (14 dates)', '0.821 / 0.821 / 0.822 (3 years halving: 0.820)', '13 / 14 / 14 of 14'],
+], [6, 6, 5])
+d.p('Adopted: three years weighted 1, 0.5 and 0.25, the only option better on every date. Five years adds nothing '
+    'measurable and needs heavier queries; equal or gentle weights let old top-ups count too much. Model version '
+    '1.0.0-dev5.')
+d.h2('7.6 Track B Evidence and the Blind Review (decisions 86, 89, 95)')
+d.p('Against top-ups, within the taxpayers it is for, Track B ranks checks better than chance and better than Track A '
+    'on every test date: AUC per check 0.62 for regular traders and 0.57 for small traders, against 0.55 and 0.52 for '
+    'Track A. Top-ups cannot show undervaluation that was never found, so the decisive test is a blind review: 25 '
+    'flagged and 25 comparison taxpayers, mixed under codes, judged by officers without knowing which is which.')
+
+# ------------------------------------------------------------------------------------ PART 8
+d.part('PART 8: OPEN QUESTIONS AND NEXT STEPS',
        'This part lists what remains to be decided, who must decide it, and the work planned for the next round.')
-d.h2('7.1 Open Questions')
+d.h2('8.1 Open Questions')
 d.table('Open Questions', ['Ref', 'Question', 'Who decides'], [
-    ['OQ-1', 'What should the list maximise: hit rate per check (efficiency) or hits and revenue caught (volume)?', 'Customs Risk Management with Data Science'],
+    ['OQ-1', 'Confirm that the list should maximise what each check finds (hit rate and revenue per check). Ranking big traders first reaches more total revenue only by spending many more checks, each finding less', 'Customs Risk Management with Data Science'],
     ['OQ-2', 'Confirm the likelihood and impact ratings, using the learned weights (decision 51) as evidence', 'Risk Officers (ratings session)'],
     ['OQ-3', 'PAR_045T maximum at 40% instead of 10%', 'Risk Officers'],
     ['OQ-4', 'APC 483 exclusion', 'Risk Officers'],
-    ['OQ-5', 'Why the hit rate fell after March 2024', 'Risk team'],
+    ['OQ-5', 'What changed around March 2024: the hit rate of all checks fell from 11-13% to 7% and has stayed there (Part 7.4)', 'Risk Officers'],
     ['OQ-6', 'Band cut-offs, including the VERY HIGH dip, against inspection capacity (Stage 7)', 'Data Science with NTC'],
     ['OQ-7', 'Does the selectivity system keep a random inspection share, and are post-clearance audit results available? Either would give an unbiased test set', 'Customs Risk Management'],
+    ['OQ-8', 'Inspection capacity: how many taxpayers can officers act on from each list (sets the line for the bands and the Risky Behaviour Flag)', 'Risk Officers'],
+    ['OQ-9', 'Blind review verdicts on the 50 coded taxpayers (proves or disproves Track B)', 'Risk Officers'],
+    ['OQ-10', 'What the S-series entry numbers are (the same goods often appear on an S- and a C-series entry)', 'Data Engineering or Risk Officers'],
 ], [1.5, 10, 5.5])
-d.h2('7.2 Next Steps')
+d.h2('8.2 Next Steps')
 d.numbered([
+    'Score the blind review verdicts and decide whether Track B goes live as a list for officers.',
+    'Pull full extracts for older dates (September 2019 to September 2022) to test Track B over more years.',
     'Re-run the seven extracts with the version 2 query and score PAR_067 and PAR_053 once tested (Stage 4 method).',
     'Stage 7: set band cut-offs against the score distribution, the VERY HIGH dip and capacity.',
     'Challenger round 2: a shadow run of the all-models blend; monotone boosting and the learned-weight scorecard '

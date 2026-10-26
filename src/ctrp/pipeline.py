@@ -11,14 +11,41 @@ from ctrp import report as R
 from ctrp.utils import RESULTS_DIR, backtest_extracts, load_extract
 
 
-def score_file(path):
+def training_extracts(snapshot):
+    """Back-test extracts whose 6-month outcome window had closed by `snapshot` (Track B learns
+    only from what was already known on that date)."""
+    cutoff = pd.Timestamp(snapshot) - pd.offsets.MonthEnd(6)
+    try:
+        ex = backtest_extracts()
+    except SystemExit:
+        return []
+    return [r for s, r in ex.items() if pd.Timestamp(s) <= cutoff]
+
+
+def score_file(path, evidence=None):
     """What: score one extract and write the officers' workbook plus a CSV copy.
-    Why:  this is the production run: one file in, one fixed-layout workbook out."""
+    Why:  this is the production run: one file in, one fixed-layout workbook out.
+          Track A (the scorecard) always runs; Track B (discovery) runs when there are at least two
+          back-test extracts it may learn from."""
     raw = load_extract(path)
     res = M.score_snapshot(raw)
+    train = training_extracts(res.snapshot)
+    if len(train) >= 2:
+        from ctrp import discovery as B
+        res.track_b = B.score_snapshot_b(raw, train)
+        res.log.append(f'Behaviour view trained on {len(train)} earlier snapshots; '
+                       f"{(res.track_b['on_discovery_list'] == 'Y').sum()} taxpayers with a Risky Behaviour Flag")
+    else:
+        res.track_b = None
+        res.log.append('Track B not run: fewer than two earlier snapshots with closed outcomes')
     RESULTS_DIR.mkdir(exist_ok=True)
     xlsx = RESULTS_DIR / f'CTRP_scores_{res.snapshot}.xlsx'
-    R.write_workbook(res, xlsx, source_file=str(path))
+    ev = None
+    if evidence:
+        from ctrp import review
+        ev = review.load_evidence(evidence)
+        res.log.append(f'Entry evidence: {len(ev)} entries for {ev["TIN"].nunique()} taxpayers from {evidence}')
+    R.write_workbook(res, xlsx, source_file=str(path), evidence=ev)
     res.scores.to_csv(RESULTS_DIR / f'CTRP_scores_{res.snapshot}.csv', index=False)
     print('\n'.join(res.log))
     print(res.scores['band'].value_counts().reindex([b for _, b in M.BANDS]).fillna(0).astype(int).to_string())

@@ -1,0 +1,11 @@
+%pyspark
+# Share of customs value by HS chapter, origin and APC (APC 000 = no exemption claimed).
+# Choose the bar chart in the result to see it as a picture.
+total_value = eda.agg(F.sum('customs_value')).first()[0]
+
+def top10(column, label):
+    return (eda.groupBy(column.alias(label))
+               .agg((F.sum('customs_value') / total_value).alias('share_of_value'))
+               .orderBy(F.desc('share_of_value')).limit(10))
+
+z.show(top10(F.substring('hsc_cd', 1, 2), 'hs_chapter'))

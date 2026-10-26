@@ -1,0 +1,10 @@
+%pyspark
+# One row per declaration for these shares (lane, top-up flag and tax repeat on every item)
+per_decl = eda.groupBy('instance_id').agg(F.max('is_red_flg').alias('red'), F.max('is_yellow_flg').alias('yellow'),
+                                          F.max('top_up_flg').alias('flag'), F.max('original_tax_amt').alias('orig'))
+z.show(per_decl.select(
+    F.count('*').alias('declarations'),
+    F.avg((F.col('red') == 1).cast('double')).alias('red lane'),
+    F.avg((F.col('yellow') == 1).cast('double')).alias('yellow lane'),
+    F.avg((F.col('flag') == 'Y').cast('double')).alias('top-up flag Y'),
+    F.avg(F.col('orig').isNull().cast('double')).alias('original tax blank')))

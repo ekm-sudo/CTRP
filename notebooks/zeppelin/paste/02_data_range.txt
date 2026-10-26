@@ -1,0 +1,11 @@
+%pyspark
+# ---------- 2. Data range: does each year exist? (LIMIT 1 stops at the first row found) ----
+import time
+t0 = time.time()
+for year in range(2012, 2027):
+    q = "SELECT 1 FROM %s WHERE assessment_dt_wid BETWEEN '%d0101' AND '%d1231' LIMIT 1" % (VIEW, year, year)
+    found = len(spark.sql(q).take(1)) > 0
+    print(year, 'has data' if found else 'no data', '(%.0f s)' % (time.time() - t0))
+# Exact first and last day (reads the whole view once, no distinct counts): uncomment to run
+# spark.sql("SELECT MIN(assessment_dt_wid) first_day, MAX(assessment_dt_wid) last_day FROM %s "
+#           "WHERE regime_cd IN ('IM4','IM7')" % VIEW).show()

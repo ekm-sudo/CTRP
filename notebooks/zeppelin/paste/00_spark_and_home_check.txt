@@ -1,0 +1,16 @@
+%pyspark
+# ---------- 0. Can Spark start, and where is my home folder? (writes nothing) ---------------
+_fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
+home = _fs.getHomeDirectory()
+print('Spark version   :', spark.version)
+print('running as      :', spark.sparkContext.sparkUser())
+print('home folder     :', home.toString())
+print('home exists     :', _fs.exists(home))
+if _fs.exists(home):
+    st = _fs.getFileStatus(home)
+    print('home owner      :', st.getOwner(), ' permissions:', st.getPermission().toString())
+for lib in ('pandas', 'numpy', 'sklearn', 'scipy'):
+    try:
+        print('%-15s : %s' % (lib, __import__(lib).__version__))
+    except Exception as e:
+        print('%-15s : not available' % lib)

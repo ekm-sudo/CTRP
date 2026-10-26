@@ -1,0 +1,10 @@
+%pyspark
+heading = F.substring('hsc_cd', 1, 4)
+headings = hist_items.groupBy('taxpayer_tin').agg(F.countDistinct(heading).alias('hs_headings_used'))
+per_declaration = F.col('hs_headings_used') / F.greatest('entries_24m', F.lit(1))
+parts['goods_spread'] = (base.select('taxpayer_tin', 'entries_24m').join(headings, 'taxpayer_tin', 'left')
+                             .withColumn('goods_spread', per_declaration)
+                             .drop('entries_24m'))
+parts['station_spread'] = parts['par023_station_spread'].select(
+    'taxpayer_tin', (1.0 - F.col('main_station_share')).alias('station_spread'))
+peek(parts['goods_spread'])

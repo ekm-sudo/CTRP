@@ -1,0 +1,5 @@
+%pyspark
+claims = F.when(F.col('preferential_treatment_flag') == 'Y', 1.0).otherwise(0.0)
+parts['ctx_preferential_use_rate'] = (hist_items.groupBy('taxpayer_tin')
+                                                 .agg(F.avg(claims).alias('ctx_preferential_use_rate')))
+peek(parts['ctx_preferential_use_rate'])

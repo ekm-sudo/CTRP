@@ -1,0 +1,8 @@
+%pyspark
+heading = F.substring('hsc_cd', 1, 4)
+headings = hist_items.groupBy('taxpayer_tin').agg(F.countDistinct(heading).alias('hs4_24m_count'))
+per_declaration = F.col('hs4_24m_count') / F.greatest('decl_24m_count', F.lit(1))
+parts['hs4_per_decl_24m_ratio'] = (base.select('taxpayer_tin', 'decl_24m_count').join(headings, 'taxpayer_tin', 'left')
+                             .withColumn('hs4_per_decl_24m_ratio', per_declaration)
+                             .drop('decl_24m_count'))
+peek(parts['hs4_per_decl_24m_ratio'])

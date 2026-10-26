@@ -1,0 +1,5 @@
+%pyspark
+is_amended = F.when(F.col('amended') == 'Y', 1.0).otherwise(0.0)
+parts['amended_per_decl_24m_rate'] = (hist.groupBy('taxpayer_tin')
+                                         .agg(F.avg(is_amended).alias('amended_per_decl_24m_rate')))
+peek(parts['amended_per_decl_24m_rate'])

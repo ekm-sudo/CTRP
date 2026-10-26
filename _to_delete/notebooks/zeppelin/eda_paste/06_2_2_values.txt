@@ -1,0 +1,9 @@
+%pyspark
+# Customs value per item is very skewed, so percentiles say more than the average
+q = [0.01, 0.25, 0.5, 0.75, 0.95, 0.99]
+spread = eda.select(
+    *[F.expr('percentile_approx(customs_value, %s)' % p).alias('value p%d' % round(100 * p)) for p in q],
+    F.avg((F.coalesce('customs_value', F.lit(0)) <= 0).cast('double')).alias('share value 0 or blank'),
+    F.avg((F.coalesce('net_weight', F.lit(0)) <= 0).cast('double')).alias('share weight 0 or blank'),
+    F.avg((F.coalesce('supplementary_qnty', F.lit(0)) > 0).cast('double')).alias('share with units'))
+z.show(spread)

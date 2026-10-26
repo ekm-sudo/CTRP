@@ -1,0 +1,3 @@
+%pyspark
+print('Clean item rows: {:,}   declarations: {:,}   taxpayers: {:,}'.format(
+    n_items, items.select('instance_id').distinct().count(), items.select('taxpayer_tin').distinct().count()))

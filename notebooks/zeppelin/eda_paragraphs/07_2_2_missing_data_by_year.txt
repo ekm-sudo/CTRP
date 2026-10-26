@@ -1,0 +1,6 @@
+%pyspark
+# Is it getting better or worse? Blank % per year for the columns the model leans on
+WATCH = ['original_tax_amt', 'hsc_cd', 'gds_org_cty', 'supplementary_qnty', 'net_weight', 'tax_assessed', 'cpc_cd',
+         'entry_num', 'decl_status', 'clearance_station_cd']
+blank_pct = [F.round(100 * F.avg(F.col(c).isNull().cast('double')), 2).alias(c) for c in WATCH]
+z.show(eda.groupBy(F.substring('assessment_dt_wid', 1, 4).alias('year')).agg(*blank_pct).orderBy('year'))

@@ -1,0 +1,94 @@
+CTRP: Hue queries for the history since 2017, in run order
+==============================================================================
+Run ONE query at a time, as ONE statement (Ctrl+Enter). Stay on the tab until it
+finishes, download the result as CSV and save it under the name shown.
+Tick the box when the file is saved. A query that times out: just run it again.
+After step 1: python main.py merge  (adds the yearly counts to the six files).
+66 queries in all.
+
+STEP 1  the yearly counts for the six dates we already have (small queries)
+------------------------------------------------------------------------------
+[ ] 01_years_bt_2023-09-30.sql               save as data/split/years_bt_2023-09-30.csv
+[ ] 02_years_bt_2024-03-31.sql               save as data/split/years_bt_2024-03-31.csv
+[ ] 03_years_bt_2024-09-30.sql               save as data/split/years_bt_2024-09-30.csv
+[ ] 04_years_bt_2025-03-31.sql               save as data/split/years_bt_2025-03-31.csv
+[ ] 05_years_bt_2025-09-30.sql               save as data/split/years_bt_2025-09-30.csv
+[ ] 06_years_bt_2026-03-31.sql               save as data/split/years_bt_2026-03-31.csv
+
+STEP 2  one date per year going back, newest first (5 parts per date)
+------------------------------------------------------------------------------
+[ ] 07_core_bt_2022-09-30.sql                save as data/split/core_bt_2022-09-30.csv
+[ ] 08_items_bt_2022-09-30.sql               save as data/split/items_bt_2022-09-30.csv
+[ ] 09_own_duty_bt_2022-09-30.sql            save as data/split/own_duty_bt_2022-09-30.csv
+[ ] 10_split_new_bt_2022-09-30.sql           save as data/split/split_new_bt_2022-09-30.csv
+[ ] 11_years_bt_2022-09-30.sql               save as data/split/years_bt_2022-09-30.csv
+    then: python main.py merge   (makes data/bt_2022-09-30.csv)
+[ ] 12_core_bt_2021-09-30.sql                save as data/split/core_bt_2021-09-30.csv
+[ ] 13_items_bt_2021-09-30.sql               save as data/split/items_bt_2021-09-30.csv
+[ ] 14_own_duty_bt_2021-09-30.sql            save as data/split/own_duty_bt_2021-09-30.csv
+[ ] 15_split_new_bt_2021-09-30.sql           save as data/split/split_new_bt_2021-09-30.csv
+[ ] 16_years_bt_2021-09-30.sql               save as data/split/years_bt_2021-09-30.csv
+    then: python main.py merge   (makes data/bt_2021-09-30.csv)
+[ ] 17_core_bt_2020-09-30.sql                save as data/split/core_bt_2020-09-30.csv
+[ ] 18_items_bt_2020-09-30.sql               save as data/split/items_bt_2020-09-30.csv
+[ ] 19_own_duty_bt_2020-09-30.sql            save as data/split/own_duty_bt_2020-09-30.csv
+[ ] 20_split_new_bt_2020-09-30.sql           save as data/split/split_new_bt_2020-09-30.csv
+[ ] 21_years_bt_2020-09-30.sql               save as data/split/years_bt_2020-09-30.csv
+    then: python main.py merge   (makes data/bt_2020-09-30.csv)
+[ ] 22_core_bt_2019-09-30.sql                save as data/split/core_bt_2019-09-30.csv
+[ ] 23_items_bt_2019-09-30.sql               save as data/split/items_bt_2019-09-30.csv
+[ ] 24_own_duty_bt_2019-09-30.sql            save as data/split/own_duty_bt_2019-09-30.csv
+[ ] 25_split_new_bt_2019-09-30.sql           save as data/split/split_new_bt_2019-09-30.csv
+[ ] 26_years_bt_2019-09-30.sql               save as data/split/years_bt_2019-09-30.csv
+    then: python main.py merge   (makes data/bt_2019-09-30.csv)
+[ ] 27_core_bt_2018-09-30.sql                save as data/split/core_bt_2018-09-30.csv
+[ ] 28_items_bt_2018-09-30.sql               save as data/split/items_bt_2018-09-30.csv
+[ ] 29_own_duty_bt_2018-09-30.sql            save as data/split/own_duty_bt_2018-09-30.csv
+[ ] 30_split_new_bt_2018-09-30.sql           save as data/split/split_new_bt_2018-09-30.csv
+[ ] 31_years_bt_2018-09-30.sql               save as data/split/years_bt_2018-09-30.csv
+    then: python main.py merge   (makes data/bt_2018-09-30.csv)
+[ ] 32_core_bt_2017-09-30.sql                save as data/split/core_bt_2017-09-30.csv
+[ ] 33_items_bt_2017-09-30.sql               save as data/split/items_bt_2017-09-30.csv
+[ ] 34_own_duty_bt_2017-09-30.sql            save as data/split/own_duty_bt_2017-09-30.csv
+[ ] 35_split_new_bt_2017-09-30.sql           save as data/split/split_new_bt_2017-09-30.csv
+[ ] 36_years_bt_2017-09-30.sql               save as data/split/years_bt_2017-09-30.csv
+    then: python main.py merge   (makes data/bt_2017-09-30.csv)
+
+STEP 3  the March dates, newest first (5 parts per date)
+------------------------------------------------------------------------------
+[ ] 37_core_bt_2023-03-31.sql                save as data/split/core_bt_2023-03-31.csv
+[ ] 38_items_bt_2023-03-31.sql               save as data/split/items_bt_2023-03-31.csv
+[ ] 39_own_duty_bt_2023-03-31.sql            save as data/split/own_duty_bt_2023-03-31.csv
+[ ] 40_split_new_bt_2023-03-31.sql           save as data/split/split_new_bt_2023-03-31.csv
+[ ] 41_years_bt_2023-03-31.sql               save as data/split/years_bt_2023-03-31.csv
+    then: python main.py merge   (makes data/bt_2023-03-31.csv)
+[ ] 42_core_bt_2022-03-31.sql                save as data/split/core_bt_2022-03-31.csv
+[ ] 43_items_bt_2022-03-31.sql               save as data/split/items_bt_2022-03-31.csv
+[ ] 44_own_duty_bt_2022-03-31.sql            save as data/split/own_duty_bt_2022-03-31.csv
+[ ] 45_split_new_bt_2022-03-31.sql           save as data/split/split_new_bt_2022-03-31.csv
+[ ] 46_years_bt_2022-03-31.sql               save as data/split/years_bt_2022-03-31.csv
+    then: python main.py merge   (makes data/bt_2022-03-31.csv)
+[ ] 47_core_bt_2021-03-31.sql                save as data/split/core_bt_2021-03-31.csv
+[ ] 48_items_bt_2021-03-31.sql               save as data/split/items_bt_2021-03-31.csv
+[ ] 49_own_duty_bt_2021-03-31.sql            save as data/split/own_duty_bt_2021-03-31.csv
+[ ] 50_split_new_bt_2021-03-31.sql           save as data/split/split_new_bt_2021-03-31.csv
+[ ] 51_years_bt_2021-03-31.sql               save as data/split/years_bt_2021-03-31.csv
+    then: python main.py merge   (makes data/bt_2021-03-31.csv)
+[ ] 52_core_bt_2020-03-31.sql                save as data/split/core_bt_2020-03-31.csv
+[ ] 53_items_bt_2020-03-31.sql               save as data/split/items_bt_2020-03-31.csv
+[ ] 54_own_duty_bt_2020-03-31.sql            save as data/split/own_duty_bt_2020-03-31.csv
+[ ] 55_split_new_bt_2020-03-31.sql           save as data/split/split_new_bt_2020-03-31.csv
+[ ] 56_years_bt_2020-03-31.sql               save as data/split/years_bt_2020-03-31.csv
+    then: python main.py merge   (makes data/bt_2020-03-31.csv)
+[ ] 57_core_bt_2019-03-31.sql                save as data/split/core_bt_2019-03-31.csv
+[ ] 58_items_bt_2019-03-31.sql               save as data/split/items_bt_2019-03-31.csv
+[ ] 59_own_duty_bt_2019-03-31.sql            save as data/split/own_duty_bt_2019-03-31.csv
+[ ] 60_split_new_bt_2019-03-31.sql           save as data/split/split_new_bt_2019-03-31.csv
+[ ] 61_years_bt_2019-03-31.sql               save as data/split/years_bt_2019-03-31.csv
+    then: python main.py merge   (makes data/bt_2019-03-31.csv)
+[ ] 62_core_bt_2018-03-31.sql                save as data/split/core_bt_2018-03-31.csv
+[ ] 63_items_bt_2018-03-31.sql               save as data/split/items_bt_2018-03-31.csv
+[ ] 64_own_duty_bt_2018-03-31.sql            save as data/split/own_duty_bt_2018-03-31.csv
+[ ] 65_split_new_bt_2018-03-31.sql           save as data/split/split_new_bt_2018-03-31.csv
+[ ] 66_years_bt_2018-03-31.sql               save as data/split/years_bt_2018-03-31.csv
+    then: python main.py merge   (makes data/bt_2018-03-31.csv)

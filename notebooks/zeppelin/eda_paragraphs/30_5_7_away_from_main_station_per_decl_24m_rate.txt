@@ -1,0 +1,6 @@
+%pyspark
+per_station = hist.groupBy('taxpayer_tin', 'station').count()          # a blank station counts as one station
+parts['away_from_main_station_per_decl_24m_rate'] = (per_station.groupBy('taxpayer_tin')
+                                             .agg((F.max('count') / F.sum('count')).alias('main_station_per_decl_24m_rate'))
+                                             .withColumn('away_from_main_station_per_decl_24m_rate', 1.0 - F.col('main_station_per_decl_24m_rate')))
+peek(parts['away_from_main_station_per_decl_24m_rate'])

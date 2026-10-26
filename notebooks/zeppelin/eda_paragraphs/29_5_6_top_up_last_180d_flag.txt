@@ -1,0 +1,6 @@
+%pyspark
+last_top_up = F.max(F.when(F.col('topped_up') == 1, F.col('adate')))
+days = hist.groupBy('taxpayer_tin').agg(F.datediff(snap_date, last_top_up).alias('days_since_last_top_up'))
+parts['top_up_last_180d_flag'] = days.withColumn(
+    'top_up_last_180d_flag', F.when(F.col('days_since_last_top_up') <= 180, 1.0).otherwise(0.0))
+peek(parts['top_up_last_180d_flag'])

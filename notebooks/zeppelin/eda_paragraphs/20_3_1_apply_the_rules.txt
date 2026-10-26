@@ -1,0 +1,54 @@
+%pyspark
+def passes(condition):
+    # A rule as a yes or no column (a blank answer counts as no)
+    return F.coalesce(condition, F.lit(False))
+
+def removed_by_rule(df, rules):
+    # How many rows each rule removes, counting a row only at the first rule it fails
+    passed_so_far, counts = F.lit(True), []
+    for code, _ in rules:
+        counts.append(F.sum((passed_so_far & ~F.col(code)).cast('int')).alias(code))
+        passed_so_far = passed_so_far & F.col(code)
+    return df.select(counts).first().asDict()
+
+# Step 1: rules about one row at a time
+ROW_RULES = [
+    ('R1', 'TIN must be 10 digits', F.col('taxpayer_tin').rlike('^[0-9]{10}$')),
+    ('R3', 'drop cancelled declarations', F.col('decl_status') != 'Cancelled'),
+    ('R4', 'imports only: IM4 (home use) and IM7 (bond)', F.col('regime_cd').isin('IM4', 'IM7')),
+    ('R13', 'drop APC 483', (F.coalesce(F.col('cpc_cd'), F.lit('')) != '483') if EXCLUDE_APC_483 else F.lit(True)),
+]
+step1 = rows.select('*', *[passes(test).alias(code) for code, _, test in ROW_RULES])
+removed1 = removed_by_rule(step1, [(c, t) for c, t, _ in ROW_RULES])
+row_rule_codes = [c for c, _, _ in ROW_RULES]
+kept1 = step1.where(reduce(lambda a, b: a & b, [F.col(c) for c in row_rule_codes])).drop(*row_rule_codes)
+
+# Step 2: rules that look at the other rows of the same entry, declaration or item
+padded_id = F.lpad('instance_id', 20, '0')                      # so '99' does not sort above '100'
+latest_id_of_entry = F.max(padded_id).over(Window.partitionBy('entry_key'))
+is_vehicle = F.substring('hsc_cd', 1, 4).isin(MOTOR_VEHICLE_HEADINGS)
+declaration_has_vehicle = F.max(F.when(is_vehicle, 1).otherwise(0)).over(Window.partitionBy('instance_id'))
+copy_number = F.row_number().over(Window.partitionBy('instance_id', 'key_itm_nbr').orderBy('assessment_dt_wid'))
+SET_RULES = [
+    ('R14', 'latest declaration ID per entry',
+     (padded_id == latest_id_of_entry) if LATEST_DECLARATION_PER_ENTRY else F.lit(True)),
+    ('R15', 'drop motor vehicle declarations',
+     (declaration_has_vehicle == 0) if EXCLUDE_MOTOR_VEHICLES else F.lit(True)),
+    ('R5', 'keep each item once', copy_number == 1),
+]
+step2 = kept1.select('*', *[passes(test).alias(code) for code, _, test in SET_RULES]).cache()
+removed2 = removed_by_rule(step2, [(c, t) for c, t, _ in SET_RULES])
+items = step2.where(F.col('R14') & F.col('R15') & F.col('R5')).drop('R14', 'R15', 'R5').cache()
+n_items = items.count()
+step2.unpersist()
+
+# The cleaning log
+log, left = [], n_loaded
+for code, text, _ in ROW_RULES + SET_RULES:
+    gone = {**removed1, **removed2}[code]
+    log.append((code, text, left, gone, left - gone))
+    left -= gone
+assert left == n_items, 'the log does not add up'
+cleaning_log = pd.DataFrame(log, columns=['rule', 'what it does', 'rows before', 'rows removed', 'rows left'])
+save(cleaning_log, 'ctrp_cleaning_log')
+z.show(cleaning_log)

@@ -136,6 +136,12 @@ def score_baseline(raw, d, train):
     return raw['par048_top_up_ratio'].fillna(0)
 
 
+def score_largest(raw, d, train):
+    """Reference only: the biggest importers by customs value. Shows how much of the top-up
+    revenue simply follows size (DECISIONS 56)."""
+    return raw['total_customs_value'].fillna(0)
+
+
 def score_scorecard(raw, d, train):
     pts, _, _ = M.layer2_scorecard(d)
     return pts.sum(axis=1)
@@ -179,6 +185,50 @@ def score_boosting_size(raw, d, train):
     return _boosting(raw, d, train, ['log_entries', 'log_value'])
 
 
+# ---- Round 2 (DECISIONS 66) -----------------------------------------------------------
+GRID = [dict(max_iter=it, learning_rate=lr, min_samples_leaf=leaf, max_leaf_nodes=nodes)
+        for it in (100, 300) for lr in (0.03, 0.1) for leaf in (100, 400) for nodes in (8, 31)]
+
+
+def _fit_boost(train, feats, mono, **hp):
+    Xr, yr, wr = zip(*[hits_per_check_rows(td, tr, feats(td)) for tr, td in train])
+    n = len(mono)
+    gb = HistGradientBoostingClassifier(random_state=M.SEED, monotonic_cst=mono,
+                                        interaction_cst=[[i] for i in range(n)], **hp)
+    return gb.fit(np.vstack(Xr), np.concatenate(yr), sample_weight=np.concatenate(wr))
+
+
+def score_boosting_tuned(raw, d, train):
+    """Monotone boosting with its settings chosen properly (forward chaining): fit on all but the
+    latest training snapshot, pick the setting with the best top-5% lift on that latest one, then
+    refit on every training snapshot. The test snapshot is never used to choose."""
+    feats = scaled_params
+    fit, val = train[:-1], train[-1]
+    best, best_lift = GRID[0], -1
+    if fit:
+        for hp in GRID:
+            gb = _fit_boost(fit, feats, [1] * 8, **hp)
+            sc = pd.Series(gb.predict_proba(feats(val[1]).to_numpy())[:, 1])
+            lf = lift(val[0].reset_index(drop=True), sc, 0.05)
+            if lf > best_lift:
+                best, best_lift = hp, lf
+    score_boosting_tuned.last_choice = best
+    gb = _fit_boost(train, feats, [1] * 8, **best)
+    return pd.Series(gb.predict_proba(feats(d).to_numpy())[:, 1], index=d.index)
+
+
+def score_boost_on_scorecard(raw, d, train):
+    """Boosting that starts from the scorecard: the scorecard score is an input (risk may only
+    rise with it) and the model learns only how each parameter should bend it. The scorecard
+    stays the anchor, so its reasons still explain most of the score."""
+    def feats(dd):
+        x = scaled_params(dd)
+        x.insert(0, 'scorecard', M.layer2_scorecard(dd)[0].sum(axis=1) / 100)
+        return x
+    gb = _fit_boost(train, feats, [1] * 9, max_iter=200, learning_rate=0.05, min_samples_leaf=200)
+    return pd.Series(gb.predict_proba(feats(d).to_numpy())[:, 1], index=d.index)
+
+
 def score_peer_percentile(raw, d, train):
     """Belgian-style baseline: expert-weighted sum of how far above the section median each
     parameter's percentile sits (0 at or below the median)."""
@@ -219,17 +269,21 @@ def score_gmm(raw, d, train):
 
 CHALLENGERS = {
     'Baseline (past top-up ratio)': score_baseline,
+    'Largest importers (reference)': score_largest,
     'Scorecard (champion)': score_scorecard,
     'Learned weights (logistic)': score_learned,
     'Data-set shrinkage': score_eb,
     'Monotone boosting': score_boosting,
     'Monotone boosting + size (warning case)': score_boosting_size,
+    'Monotone boosting (tuned)': score_boosting_tuned,
+    'Boosting on top of the scorecard': score_boost_on_scorecard,
     'Peer percentile (one-sided)': score_peer_percentile,
     'Ensemble IF + PCA (one-sided)': score_ensemble,
     'K-Means distance (one-sided)': score_kmeans,
     'Gaussian mixture (one-sided)': score_gmm,
 }
-SUPERVISED = {'Learned weights (logistic)', 'Monotone boosting', 'Monotone boosting + size (warning case)'}
+SUPERVISED = {'Learned weights (logistic)', 'Monotone boosting', 'Monotone boosting + size (warning case)',
+              'Monotone boosting (tuned)', 'Boosting on top of the scorecard'}
 
 # =========================================================================================
 # Ensembles: combining models
@@ -249,6 +303,23 @@ BLENDS = {
 }
 STACK_MEMBERS = ['Scorecard (champion)', 'Monotone boosting', 'Learned weights (logistic)'] + UNSUPERVISED_SD
 STACKED = 'Stacked blend (weights learned from earlier snapshots)'
+WEIGHTED = 'Weighted blend (scorecard share chosen on earlier snapshots)'
+WEIGHTED_OTHERS = ['Monotone boosting', 'Learned weights (logistic)']
+
+
+def weighted_blend(scores, w):
+    others = pd.concat([rank_pct(scores[m]) for m in WEIGHTED_OTHERS], axis=1).mean(axis=1)
+    return w * rank_pct(scores['Scorecard (champion)']) + (1 - w) * others
+
+
+def choose_weight(history_scores):
+    """One setting only: the scorecard's share (0 to 1 in steps of 0.1) with the best average top-5%
+    lift over EARLIER test snapshots. With no history yet, an even split (0.5)."""
+    if not history_scores:
+        return 0.5
+    grid = np.round(np.arange(0, 1.01, 0.1), 1)
+    avg = [np.mean([lift(r, weighted_blend(sc, w), 0.05) for r, sc in history_scores]) for w in grid]
+    return float(grid[int(np.argmax(avg))])
 
 
 def rank_pct(score):
@@ -280,6 +351,7 @@ def compare(extracts, test_from=2, boot=True):
     snaps = list(extracts)
     D = {s: M.derive(extracts[s]) for s in snaps}
     rows, prev, weights, history, stack_w = [], {}, {}, [], {}
+    wb_history, compare.blend_weight, compare.tuned_choice = [], {}, {}
     for t in range(test_from, len(snaps)):
         s = snaps[t]
         raw, d = extracts[s].reset_index(drop=True), D[s].reset_index(drop=True)
@@ -292,6 +364,11 @@ def compare(extracts, test_from=2, boot=True):
             scores[STACKED] = st
             stack_w[s] = stacked_score.last_weights
         history.append((raw, pd.DataFrame({m: rank_pct(scores[m]) for m in STACK_MEMBERS})))
+        w_s = choose_weight(wb_history)
+        compare.blend_weight[s] = w_s
+        compare.tuned_choice[s] = getattr(score_boosting_tuned, 'last_choice', None)
+        wb_history.append((raw, {m: scores[m] for m in ['Scorecard (champion)'] + WEIGHTED_OTHERS}))
+        scores[WEIGHTED] = weighted_blend(scores, w_s)
         champ = scores['Scorecard (champion)']
         champ_top = set(raw.loc[top_mask(champ, 0.05), 'taxpayer_tin'])
         red = raw['ctx_red_lane_rate'].fillna(0)
@@ -299,8 +376,10 @@ def compare(extracts, test_from=2, boot=True):
             top = raw.loc[top_mask(sc, 0.05)]
             row = dict(snapshot=s, model=name,
                        **{f'lift_top{int(x * 100)}': lift(raw, sc, x) for x in SHARES},
+                       checks_top5=top['out_checked'].sum(),
                        hits_top5=top['out_checked_hits'].sum(),
                        revenue_top5=revenue_share(raw, sc, 0.05),
+                       revenue_per_check_top5=top['out_top_up'].sum() / max(top['out_checked'].sum(), 1),
                        small_share_top5=(top['entries_24m'] < M.ADEQUATE_ENTRIES).mean(),
                        checked_in_top5=(top['out_checked'] > 0).mean(),
                        overlap_with_champion=len(set(top['taxpayer_tin']) & champ_top) / len(champ_top),
@@ -318,7 +397,8 @@ def compare(extracts, test_from=2, boot=True):
     detail = pd.DataFrame(rows)
     table = detail.groupby('model', sort=False).agg(
         lift_top1=('lift_top1', 'mean'), lift_top5=('lift_top5', 'mean'), lift_top10=('lift_top10', 'mean'),
-        hits_top5=('hits_top5', 'mean'), revenue_top5=('revenue_top5', 'mean'),
+        checks_top5=('checks_top5', 'mean'), hits_top5=('hits_top5', 'mean'), revenue_top5=('revenue_top5', 'mean'),
+        revenue_per_check_top5=('revenue_per_check_top5', 'mean'),
         small_share_top5=('small_share_top5', 'mean'), checked_in_top5=('checked_in_top5', 'mean'),
         overlap_with_champion=('overlap_with_champion', 'mean'), rank_stability=('rank_stability', 'mean'),
         corr_past_red_lane=('corr_past_red_lane', 'mean'))

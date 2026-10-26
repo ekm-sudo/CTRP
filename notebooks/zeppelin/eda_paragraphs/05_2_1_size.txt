@@ -1,0 +1,12 @@
+%pyspark
+eda = rows.where((F.col('assessment_dt_wid') > HIST_START) & (F.col('assessment_dt_wid') <= SNAP)
+                 & F.col('regime_cd').isin('IM4', 'IM7'))
+
+# How much data, per year (rows repeat items, so declarations and entries are counted as distinct IDs)
+size = (eda.groupBy(F.substring('assessment_dt_wid', 1, 4).alias('year'))
+           .agg(F.count('*').alias('item_rows'),
+                F.countDistinct('instance_id').alias('declarations'),
+                F.countDistinct('entry_key').alias('entries'),
+                F.countDistinct('taxpayer_tin').alias('taxpayers'))
+           .orderBy('year'))
+z.show(size)

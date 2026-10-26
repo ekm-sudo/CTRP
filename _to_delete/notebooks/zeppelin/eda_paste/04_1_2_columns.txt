@@ -1,0 +1,12 @@
+%pyspark
+# Each column: its type, an example, and how often it is blank
+blank = rows.select([F.avg(F.col(c).isNull().cast('double')).alias(c) for c in rows.columns]).first().asDict()
+example = rows.limit(1000).toPandas()
+overview = pd.DataFrame({
+    'column': rows.columns,
+    'type': [t for _, t in rows.dtypes],
+    'example': [example[c].dropna().iloc[0] if example[c].notna().any() else None for c in rows.columns],
+    'blank %': [round(100 * blank[c], 1) for c in rows.columns],
+})
+overview['example'] = overview['example'].astype(str)
+z.show(overview)

@@ -1,0 +1,9 @@
+%pyspark
+# ---------- 5. Run all the other snapshots: the ONE LONG RUN (one after another) -----------
+# Every back-test date from Sep 2017 to Mar 2026 plus the live date. Safe to re-run after a
+# failure or a dropped session: finished snapshots are skipped, so it carries on where it stopped.
+for snap, live in SNAPSHOTS:
+    if (snap, live) == TEST_SNAPSHOT:
+        continue                      # already done in paragraph 4
+    run_snapshot(snap, live)
+print('all done')

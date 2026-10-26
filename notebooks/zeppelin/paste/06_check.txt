@@ -1,0 +1,28 @@
+%pyspark
+# ---------- 6. Check the outputs -------------------------------------------------------------
+from pyspark.sql import functions as F
+for snap, live in SNAPSHOTS:
+    name = ('live_' if live else 'bt_') + snap
+    try:
+        d = spark.table(name.replace('-', '_'))
+        n, tins = d.count(), d.select('taxpayer_tin').distinct().count()
+        b = spark.table('trackb_' + name.replace('-', '_')).count() if RUN_TRACK_B else 0
+        print('%-18s %8s taxpayers  %s  Track B rows %s' % (name, format(n, ','),
+              'one row per TIN' if n == tins else 'DUPLICATE TINs', format(b, ',')))
+    except Exception as e:
+        print('%-18s not run yet (%s)' % (name, str(e).splitlines()[0][:80]))
+
+# Summary of each back-test snapshot (taxpayers, declarations, checks, hits, hit rate)
+rows = []
+for snap, live in SNAPSHOTS:
+    name = ('live_' if live else 'bt_') + snap
+    try:
+        rows.append(spark.table(name.replace('-', '_')).select(
+            F.lit(name).alias('extract'), F.count('*').alias('taxpayers'),
+            F.sum('entries_24m').alias('declarations'), F.sum('out_checked').alias('checked'),
+            F.sum('out_checked_hits').alias('hits')))
+    except Exception:
+        pass
+if rows:
+    from functools import reduce
+    z.show(reduce(lambda a, b: a.unionByName(b), rows).withColumn('hit_rate', F.col('hits') / F.col('checked')))

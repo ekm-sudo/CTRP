@@ -1,0 +1,25 @@
+%pyspark
+# The view's definition joins each item to every inspection action recorded on its declaration
+# (awunadm.insp_act_tab_t). If that is where the copies come from, an item has as many copies as its declaration
+# has inspection actions (or 1 copy when there are none).
+day = F.col('assessment_dt_wid').cast('string')
+view_rows = (spark.table(VIEW)
+             .where((day > HIST_START) & (day <= SNAP) & F.col('regime_cd').isin('IM4', 'IM7'))
+             .select(F.col('instance_id').cast('string').alias('instance_id'),
+                     F.col('key_itm_nbr').cast('string').alias('key_itm_nbr'),
+                     F.col('taxpayer_tin').cast('string').alias('taxpayer_tin'),
+                     'sad_sid', 'op_date_time', 'inf'))
+if SAMPLE_1_IN:
+    view_rows = view_rows.where(F.pmod(F.hash('taxpayer_tin'), SAMPLE_1_IN) == 0)
+
+has_action = F.col('sad_sid').isNotNull() | F.col('op_date_time').isNotNull() | F.col('inf').isNotNull()
+actions = (view_rows.where(has_action).groupBy('instance_id')
+                    .agg(F.size(F.collect_set(F.struct('sad_sid', 'op_date_time', 'inf'))).alias('inspection_actions')))
+per_item = (view_rows.groupBy('instance_id', 'key_itm_nbr').agg(F.count('*').alias('copies'))
+                     .join(actions, 'instance_id', 'left')
+                     .fillna(0, subset=['inspection_actions']))
+repeated = per_item.where('copies > 1')
+explained = F.col('copies') == F.greatest('inspection_actions', F.lit(1))
+z.show(repeated.select(F.count('*').alias('repeated items'),
+                       F.avg(explained.cast('double')).alias('share whose copies = inspection actions on the declaration')))
+z.show(repeated.orderBy(F.desc('copies')).limit(10))

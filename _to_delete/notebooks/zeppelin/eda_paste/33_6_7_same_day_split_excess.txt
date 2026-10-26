@@ -1,0 +1,12 @@
+%pyspark
+splittable = hist_items.where(~F.substring('hsc_cd', 1, 2).isin('25', '27')
+                              & ~F.coalesce(F.col('extended_proc_cd'), F.lit('')).isin('4080', '7180'))
+per_day = (splittable.groupBy('taxpayer_tin', 'assessment_dt_wid', 'hsc_cd')
+                     .agg(F.countDistinct('instance_id').alias('n'))
+                     .withColumn('n_repeat', F.when(F.col('n') >= 2, F.col('n')).otherwise(0)))
+norm = per_day.groupBy('hsc_cd').agg((F.sum('n_repeat') / F.sum('n')).alias('norm_share'))
+parts['same_day_split_excess'] = (per_day.join(norm, 'hsc_cd').groupBy('taxpayer_tin')
+    .agg((F.sum('n_repeat') / F.sum('n')).alias('same_day_split_share'),
+         (F.sum(F.col('n') * F.col('norm_share')) / F.sum('n')).alias('same_day_split_expected'))
+    .withColumn('same_day_split_excess', F.col('same_day_split_share') - F.col('same_day_split_expected')))
+peek(per_day.orderBy(F.desc('n')))
